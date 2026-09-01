@@ -210,20 +210,75 @@ func (r Resource) validate() error {
 // not support RCPs, so a resource in one of these services can never reach
 // Verified.
 //
-// Every service here is also resource-policy-capable, so in practice the RCP
-// caveat currently rides along with the resource-policy one. It is tracked
-// separately anyway: they are two different mechanisms, and AWS could extend
-// RCP support to a service that carries no resource policy of its own.
+// An earlier version of this list held seven services and noted that every one
+// was also resource-policy-capable, so the RCP caveat "rode along" with the
+// resource-policy one. That is no longer true in either direction, and both
+// halves mattered:
+//
+//   - resource_policy_capable is now per-operation, so on a create the RCP
+//     caveat stands alone rather than accompanying anything.
+//   - AWS has since extended RCPs to services that carry no resource policy of
+//     their own (dynamodb, logs, autoscaling and others below). Those would
+//     have reached Verified with an RCP still able to deny them.
+//
+// Note the asymmetry with resource-based policies, which is why the "the
+// resource does not exist yet" reasoning does NOT transfer here: a
+// resource-based policy lives on the resource, so a resource that does not
+// exist has none — but an RCP is attached to an account, OU, or organization
+// root, so it exists and applies to the request that creates the resource.
+// AWS: "RCPs apply to the resources that are authorized as part of an operation
+// request... found in the Resource type column of the Action table." Creates
+// authorize a resource type, so RCPs govern them.
+//
+// Checked against the service list on 2026-09-01. This list will drift; it is
+// the kind of thing the mapping-maintenance pipeline should re-check.
 //
 // Source: https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_rcps.html
 var rcpServices = map[string]bool{
-	"s3":             true,
-	"sts":            true,
-	"kms":            true,
-	"sqs":            true,
-	"secretsmanager": true,
-	"ecr":            true,
-	"aoss":           true, // OpenSearch Serverless
+	"aoss":                  true, // OpenSearch Serverless
+	"appconfig":             true,
+	"appstream":             true,
+	"autoscaling":           true,
+	"cloudfront":            true,
+	"cloudsearch":           true,
+	"codebuild":             true,
+	"codecommit":            true,
+	"codepipeline":          true,
+	"cognito-identity":      true,
+	"cognito-idp":           true,
+	"comprehend":            true,
+	"comprehendmedical":     true,
+	"cost-optimization-hub": true,
+	"dax":                   true,
+	"dynamodb":              true,
+	"ecr":                   true,
+	"events":                true, // EventBridge
+	"firehose":              true,
+	"fis":                   true,
+	"health":                true,
+	"inspector-scan":        true,
+	"kendra":                true,
+	"kinesisvideo":          true,
+	"kms":                   true,
+	"logs":                  true, // CloudWatch Logs
+	"memorydb":              true,
+	"networkmonitor":        true,
+	"opensearch":            true,
+	"pca-connector-ad":      true,
+	"polly":                 true,
+	"pricing":               true,
+	"s3":                    true,
+	"secretsmanager":        true,
+	"signin":                true,
+	"sqs":                   true,
+	"sts":                   true,
+	"support":               true,
+	"textract":              true,
+	"timestream-influxdb":   true,
+	"transcribe":            true,
+	"transfer":              true,
+	"translate":             true,
+	"wafv2":                 true,
 }
 
 // RCPGoverned reports whether this resource's service is subject to resource
