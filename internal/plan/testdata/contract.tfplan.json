@@ -1,0 +1,48 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "configuration": {
+    "provider_config": {
+      "aws": {
+        "name": "aws",
+        "expressions": {
+          "region": { "constant_value": "us-east-1" }
+        }
+      }
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket.allowed",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "allowed",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "bucket": "preflight-contract-exact-bucket",
+          "force_destroy": false
+        },
+        "after_unknown": { "arn": true, "id": true }
+      }
+    },
+    {
+      "address": "aws_s3_bucket.denied",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "denied",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "bucket": "preflight-contract-some-other-bucket",
+          "force_destroy": false
+        },
+        "after_unknown": { "arn": true, "id": true }
+      }
+    }
+  ]
+}

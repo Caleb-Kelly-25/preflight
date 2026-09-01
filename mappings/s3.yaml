@@ -1,0 +1,153 @@
+# Amazon S3
+#
+# VERIFICATION STATUS
+#
+#   aws_s3_bucket  ....................  VERIFIED (empirically, provider v5.100.0)
+#   everything else  ..................  draft
+#
+# Two dimensions must hold before an entry is `verified`; see README.md.
+#   1. Names and ARNs   - checked via accessanalyzer:ValidatePolicy, which is
+#                         authoritative. Done for every entry in this file.
+#   2. Completeness     - proven only by granting a role exactly the mapped
+#                         actions and running a real terraform apply. Done for
+#                         aws_s3_bucket only.
+#
+# That exercise found the original aws_s3_bucket entry under-reported by 14
+# actions, which is the dangerous direction: it would have reported "allowed"
+# for an apply that cannot succeed. Assume the remaining draft entries in this
+# file are wrong the same way until someone repeats the test for them.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
+
+resources:
+  - type: aws_s3_bucket
+    service: s3
+    status: verified
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
+    arn_format: "arn:${Partition}:s3:::${BucketName}"
+    arn_attributes:
+      BucketName: bucket
+    resource_policy_capable: true
+    context_keys:
+      # Deploy roles are commonly gated on tags at creation time. Sourcing the
+      # value matters in both directions: unsupplied, a tag condition can deny
+      # (which we would then suppress as inconclusive) or silently allow.
+      "aws:RequestTag/*":
+        from: tags
+
+    # Terraform reads the bucket back after every write, and each of these is
+    # hard-required — derived empirically, one AccessDenied at a time, against
+    # provider v5.100.0. See the note below.
+    read_actions:
+      - s3:ListBucket
+      - s3:GetAccelerateConfiguration
+      - s3:GetBucketAcl
+      - s3:GetBucketCORS
+      - s3:GetBucketLogging
+      - s3:GetBucketObjectLockConfiguration
+      - s3:GetBucketPolicy
+      - s3:GetBucketRequestPayment
+      - s3:GetBucketTagging
+      - s3:GetBucketVersioning
+      - s3:GetBucketWebsite
+      - s3:GetEncryptionConfiguration
+      - s3:GetLifecycleConfiguration
+      - s3:GetReplicationConfiguration
+
+    operations:
+      create:
+        - s3:CreateBucket
+        - s3:PutBucketTagging
+      update:
+        - s3:PutBucketTagging
+      delete:
+        - s3:DeleteBucket
+
+    notes: >-
+      VERIFIED EMPIRICALLY 2026-09-01, provider v5.100.0. A role holding exactly
+      these 17 actions applies and destroys a tagged bucket; removing any one of
+      them fails. The previous entry claimed 3 actions and was wrong in the
+      dangerous direction — it would have reported "allowed" for a deploy that
+      cannot succeed.
+
+      Two things worth knowing. s3:PutBucketTagging is listed on create because
+      CreateBucket does not accept tags, so a tagged bucket needs a second call;
+      an untagged bucket does not, so this over-reports until the schema can
+      express conditional actions. Over-reporting fails safe.
+
+      And omitting s3:ListBucket does NOT fail cleanly: the provider retries
+      HeadBucket until the apply times out. A missing permission that presents
+      as a hang rather than an error is exactly the failure preflight exists to
+      catch early.
+
+      Still not covered: force_destroy, which empties the bucket first and needs
+      s3:DeleteObject and s3:DeleteObjectVersion.
+
+  - type: aws_s3_bucket_policy
+    service: s3
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
+    arn_format: "arn:${Partition}:s3:::${BucketName}"
+    arn_attributes:
+      BucketName: bucket
+    resource_policy_capable: true
+    operations:
+      create:
+        - s3:PutBucketPolicy
+      update:
+        - s3:PutBucketPolicy
+      delete:
+        - s3:DeleteBucketPolicy
+
+  - type: aws_s3_bucket_versioning
+    service: s3
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
+    arn_format: "arn:${Partition}:s3:::${BucketName}"
+    arn_attributes:
+      BucketName: bucket
+    operations:
+      create:
+        - s3:PutBucketVersioning
+      update:
+        - s3:PutBucketVersioning
+      delete:
+        - s3:PutBucketVersioning
+    notes: >-
+      Destroying this resource does not remove versioning; Terraform suspends
+      it, which is still a PutBucketVersioning call.
+
+  - type: aws_s3_bucket_public_access_block
+    service: s3
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
+    arn_format: "arn:${Partition}:s3:::${BucketName}"
+    arn_attributes:
+      BucketName: bucket
+    operations:
+      create:
+        - s3:PutBucketPublicAccessBlock
+      update:
+        - s3:PutBucketPublicAccessBlock
+      delete:
+        - s3:PutBucketPublicAccessBlock
+
+  - type: aws_s3_bucket_server_side_encryption_configuration
+    service: s3
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
+    arn_format: "arn:${Partition}:s3:::${BucketName}"
+    arn_attributes:
+      BucketName: bucket
+    operations:
+      create:
+        - s3:PutEncryptionConfiguration
+      update:
+        - s3:PutEncryptionConfiguration
+      delete:
+        - s3:PutEncryptionConfiguration
+    notes: >-
+      The IAM action is s3:PutEncryptionConfiguration, NOT s3:PutBucketEncryption
+      — the API operation and the IAM action have different names here. AWS's
+      validator confirms the latter does not exist. When the configuration names
+      a KMS key, that key's own policy also governs access and is not evaluated.
