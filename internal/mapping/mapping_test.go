@@ -81,6 +81,22 @@ resources:
     service: s3
     status: draft
     operations: {create: [CreateBucket]}`,
+		// `verified` is what lets a finding reach Verified instead of being
+		// capped at Likely. Claiming it with no stated basis is exactly the
+		// unverified-presenting-as-safe failure the tool exists to prevent.
+		"verified without source": `
+resources:
+  - type: aws_thing
+    service: s3
+    status: verified
+    operations: {create: [s3:CreateBucket]}`,
+		"verified with blank source": `
+resources:
+  - type: aws_thing
+    service: s3
+    status: verified
+    source: "   "
+    operations: {create: [s3:CreateBucket]}`,
 	}
 
 	for name, doc := range tests {

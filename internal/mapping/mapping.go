@@ -64,9 +64,25 @@ type Resource struct {
 	// These are unioned into every operation's action list, so an entry states
 	// them once rather than repeating them three times.
 	ReadActions []string `yaml:"read_actions,omitempty"`
-	// ResourcePolicyCapable marks resource types that can carry their own
-	// policy, which simulation cannot evaluate.
-	ResourcePolicyCapable bool `yaml:"resource_policy_capable,omitempty"`
+	// ResourcePolicyCapable lists the operations during which the target
+	// resource can be denied by its own resource-based policy, which simulation
+	// cannot evaluate for roles.
+	//
+	// This is per-operation, not per-type, because a resource that does not yet
+	// exist has no policy to deny it. Measured 2026-09-01 against a bucket whose
+	// policy denied the calling role every s3 action:
+	//
+	//   PutBucketVersioning on that bucket  -> denied by the resource policy
+	//   GetBucketTagging on that bucket     -> denied by the resource policy
+	//   CreateBucket for a NEW bucket       -> allowed
+	//   read-backs on the new bucket        -> allowed
+	//
+	// So aws_s3_bucket lists [update, delete]: creating it cannot be denied by
+	// a policy that does not exist yet. But aws_s3_bucket_versioning lists
+	// create too, because its "create" writes to a bucket that already exists —
+	// the Terraform operation and the AWS resource's lifetime are not the same
+	// thing, and only the entry's author knows which is which.
+	ResourcePolicyCapable []Operation `yaml:"resource_policy_capable,omitempty"`
 
 	// ContextKeys sources condition-key values from plan attributes.
 	//
@@ -141,6 +157,13 @@ func (r Resource) validate() error {
 	if r.Status != StatusDraft && r.Status != StatusVerified {
 		return fmt.Errorf("%s: status must be %q or %q, got %q", r.Type, StatusDraft, StatusVerified, r.Status)
 	}
+	// `verified` is the strongest claim this database makes: it is what lets a
+	// finding reach Verified rather than being capped at Likely. A claim with
+	// nothing behind it is worse than no claim, so the reviewer's starting point
+	// is required rather than merely conventional.
+	if r.Status == StatusVerified && strings.TrimSpace(r.Source) == "" {
+		return fmt.Errorf("%s: status %q requires a `source` URL recording how the action list was established", r.Type, StatusVerified)
+	}
 	for op, actions := range r.Operations {
 		switch op {
 		case OpCreate, OpUpdate, OpDelete:
@@ -156,6 +179,13 @@ func (r Resource) validate() error {
 	for _, a := range r.ReadActions {
 		if !strings.Contains(a, ":") {
 			return fmt.Errorf("%s: read action %q is not of the form service:Action", r.Type, a)
+		}
+	}
+	for _, op := range r.ResourcePolicyCapable {
+		switch op {
+		case OpCreate, OpUpdate, OpDelete:
+		default:
+			return fmt.Errorf("%s: resource_policy_capable lists unknown operation %q", r.Type, op)
 		}
 	}
 	for key, src := range r.ContextKeys {
@@ -199,6 +229,18 @@ var rcpServices = map[string]bool{
 // RCPGoverned reports whether this resource's service is subject to resource
 // control policies.
 func (r Resource) RCPGoverned() bool { return rcpServices[r.Service] }
+
+// ResourcePolicyApplies reports whether a resource-based policy could deny this
+// operation. See the ResourcePolicyCapable field for the measurement behind the
+// per-operation distinction.
+func (r Resource) ResourcePolicyApplies(op Operation) bool {
+	for _, o := range r.ResourcePolicyCapable {
+		if o == op {
+			return true
+		}
+	}
+	return false
+}
 
 // Verified reports whether the entry has been checked against AWS's Service
 // Authorization Reference. Draft entries cap findings at Likely.

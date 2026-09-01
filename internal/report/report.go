@@ -81,9 +81,9 @@ func WriteJSON(w io.Writer, r *finding.Report) error {
 // resources by address ("aws_s3_bucket.logs"), not by position. Emitting SARIF
 // without locations would produce annotations GitHub cannot place inline, which
 // is worse than emitting nothing. Closing this needs an HCL pass over the
-// configuration to map address to file:line. See docs/ARCHITECTURE.md.
+// configuration to map address to file:line. Design: docs/DESIGN.md §10.3.
 var ErrSARIFUnimplemented = errors.New(
-	"sarif output is not implemented yet: it requires mapping resource addresses to source file and line, which the plan JSON does not provide (see docs/ARCHITECTURE.md)")
+	"sarif output is not implemented yet: it requires mapping resource addresses to source file and line, which the plan JSON does not provide")
 
 // WriteSARIF is not yet implemented; see ErrSARIFUnimplemented.
 func WriteSARIF(io.Writer, *finding.Report) error {

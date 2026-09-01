@@ -77,9 +77,14 @@ preflight version
 | `--format` | `text` | `text`, `json`, or `sarif` |
 | `--fail-on` | `denied` | `denied`, `likely`, or `unchecked` |
 | `--region` | *(plan, then environment)* | used to build resource ARNs |
-| `--context` | | supply a condition key, repeatable: `--context aws:SourceIp=10.0.0.1` |
+| `--context` | | supply a condition key, repeatable: `--context aws:SourceIp@ip=10.0.0.1` |
 | `--explain` | `false` | show the context supplied and the raw decision per action |
 | `--timeout` | `5m` | overall budget for AWS calls |
+
+`--context` takes an optional type after `@`: `string` (the default),
+`stringList`, `numeric`, `boolean`, `date`, `ip`, or `arn`. The type is not
+cosmetic — AWS rejects a context value whose type does not match how the policy
+uses the key, so an IP-valued key sent as a string is simply refused.
 
 The principal is resolved automatically via `sts:GetCallerIdentity`, so the
 common case needs no flag at all. Pass `--principal` when the identity that will

@@ -76,9 +76,10 @@ resources:
   - type: aws_s3_bucket
     service: s3
     status: verified
+    source: https://example.invalid/test-fixture
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes: { BucketName: bucket }
-    resource_policy_capable: true
+    resource_policy_capable: [update, delete]
     context_keys:
       "aws:RequestTag/*": { from: tags }
     operations:
@@ -88,6 +89,7 @@ resources:
   - type: aws_iam_role
     service: iam
     status: %s
+    source: https://example.invalid/test-fixture
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
     arn_attributes: { RoleName: name }
     operations:
@@ -133,14 +135,35 @@ func analyze(t *testing.T, opts engine.Options) *finding.Report {
 	if opts.Identity.PolicySourceARN == "" {
 		opts.Identity = iamUser(t)
 	}
+	return analyzePlan(t, testPlan(t), opts)
+}
+
+// analyzePlan is analyze against a caller-supplied plan, for the cases the
+// shared fixture does not cover.
+func analyzePlan(t *testing.T, p *plan.Plan, opts engine.Options) *finding.Report {
+	t.Helper()
+	if opts.Identity.PolicySourceARN == "" {
+		opts.Identity = iamUser(t)
+	}
 	if opts.Region == "" {
 		opts.Region = "us-east-1"
 	}
-	rep, err := engine.Analyze(context.Background(), testPlan(t), opts)
+	rep, err := engine.Analyze(context.Background(), p, opts)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
 	return rep
+}
+
+// planFromJSON parses an inline plan document, so a test needing one specific
+// shape does not have to add a file or bend the shared fixture around itself.
+func planFromJSON(t *testing.T, doc string) *plan.Plan {
+	t.Helper()
+	p, err := plan.Parse(strings.NewReader(doc))
+	if err != nil {
+		t.Fatalf("parsing inline plan: %v", err)
+	}
+	return p
 }
 
 func findingFor(t *testing.T, r *finding.Report, addr, op string) finding.Finding {
@@ -337,6 +360,7 @@ resources:
   - type: aws_iam_role
     service: iam
     status: verified
+    source: https://example.invalid/test-fixture
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
     arn_attributes: { RoleName: name }
     context_keys:
@@ -577,10 +601,53 @@ func TestAnalyzeResourcePolicyAndRCPForceLikely(t *testing.T) {
 
 	f := findingFor(t, rep, "aws_s3_bucket.logs", "create")
 	requireLevel(t, f, finding.LevelLikely)
-	requireReason(t, f, finding.ReasonResourcePolicyNotEvaluated)
 	requireReason(t, f, finding.ReasonRCPNotEvaluated)
 	if hasReason(f, finding.ReasonARNUnresolved) {
 		t.Error("ARN reported unresolved, but the fixture supplies a literal bucket name")
+	}
+}
+
+// TestResourcePolicyCaveatIsPerOperation pins the 2026-09-01 measurement: a
+// bucket that does not exist yet cannot be denied by its own policy, so a
+// create carries no resource-policy caveat while a delete does. Getting this
+// backwards in either direction is expensive — attaching the caveat to create
+// makes Verified permanently unreachable for no reason, and dropping it from
+// delete produces a confident pass for an apply a bucket policy will refuse.
+func TestResourcePolicyCaveatIsPerOperation(t *testing.T) {
+	rep := analyze(t, engine.Options{
+		Database:  testDB(t, "verified"),
+		Simulator: &fakeSimulator{},
+	})
+
+	create := findingFor(t, rep, "aws_s3_bucket.logs", "create")
+	if hasReason(create, finding.ReasonResourcePolicyNotEvaluated) {
+		t.Error("create carries the resource-policy caveat, but the bucket does not exist yet, so no policy can deny it")
+	}
+
+	// The shared fixture has no S3 delete, so this half needs its own plan.
+	delPlan := planFromJSON(t, `{
+      "format_version": "1.2",
+      "terraform_version": "1.9.0",
+      "resource_changes": [{
+        "address": "aws_s3_bucket.old",
+        "mode": "managed",
+        "type": "aws_s3_bucket",
+        "name": "old",
+        "provider_name": "registry.terraform.io/hashicorp/aws",
+        "change": {
+          "actions": ["delete"],
+          "before": {"bucket": "retired-logs"},
+          "after": null
+        }
+      }]
+    }`)
+	delRep := analyzePlan(t, delPlan, engine.Options{
+		Database:  testDB(t, "verified"),
+		Simulator: &fakeSimulator{},
+	})
+	del := findingFor(t, delRep, "aws_s3_bucket.old", "delete")
+	if !hasReason(del, finding.ReasonResourcePolicyNotEvaluated) {
+		t.Errorf("delete is missing the resource-policy caveat; it acts on an existing bucket, which a bucket policy can deny. got %v", del.Reasons)
 	}
 }
 
@@ -623,6 +690,7 @@ resources:
   - type: aws_s3_bucket
     service: s3
     status: verified
+    source: https://example.invalid/test-fixture
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes: { BucketName: bucket }
     read_actions: [s3:ListBucket, s3:GetBucketTagging]

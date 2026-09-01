@@ -80,21 +80,49 @@ Run "preflight check -h" for check's flags.
 `)
 }
 
-// contextFlag collects repeated --context KEY=VALUE pairs.
+// contextFlag collects repeated --context KEY=VALUE or KEY@TYPE=VALUE pairs.
+//
+// The type is delimited with "@" rather than ":" because IAM context keys
+// contain colons themselves ("aws:SourceIp"), which would make a colon
+// delimiter ambiguous. "@" appears in no AWS context key name.
 type contextFlag []finding.ContextEntry
 
 func (c *contextFlag) String() string { return "" }
 
 func (c *contextFlag) Set(s string) error {
-	key, value, ok := strings.Cut(s, "=")
-	if !ok || key == "" {
-		return fmt.Errorf("want KEY=VALUE, got %q", s)
+	spec, value, ok := strings.Cut(s, "=")
+	if !ok || spec == "" {
+		return fmt.Errorf("want KEY=VALUE or KEY@TYPE=VALUE, got %q", s)
 	}
-	values := strings.Split(value, ",")
+	key, typeName, explicit := strings.Cut(spec, "@")
+	if key == "" {
+		return fmt.Errorf("context key is empty in %q", s)
+	}
+
+	// The type is not cosmetic: the simulator rejects an entry whose type does
+	// not match how the policy uses the key, so an ip-valued key sent as a
+	// string is simply refused. Defaulting to string is safe; guessing from the
+	// key name would not be.
 	typ := finding.ContextString
-	if len(values) > 1 {
-		typ = finding.ContextStringList
+	if explicit {
+		typ = finding.ContextValueType(typeName)
+		if !finding.ValidContextValueType(typ) {
+			return fmt.Errorf("unknown context type %q in %q (want string, stringList, numeric, boolean, date, ip, or arn)", typeName, s)
+		}
 	}
+
+	values := []string{value}
+	switch {
+	case typ == finding.ContextStringList:
+		values = strings.Split(value, ",")
+	case !explicit && strings.Contains(value, ","):
+		// A comma was previously taken as a silent list separator, which both
+		// mangled values that legitimately contain one and hid the fact that a
+		// type was being inferred. The ambiguity is the caller's to resolve.
+		return fmt.Errorf("value for %q contains a comma: pass %s@stringList=%s for a list, or %s@string=%s to keep it literal",
+			key, key, value, key, value)
+	}
+
 	*c = append(*c, finding.ContextEntry{Key: key, Type: typ, Values: values})
 	return nil
 }
@@ -112,7 +140,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		timeout      = fs.Duration("timeout", 5*time.Minute, "overall budget for AWS calls")
 		extraContext contextFlag
 	)
-	fs.Var(&extraContext, "context", "supply a condition key value, repeatable: --context aws:SourceIp=10.0.0.1")
+	fs.Var(&extraContext, "context", "supply a condition key value, repeatable: --context aws:SourceIp@ip=10.0.0.1 (type defaults to string)")
 
 	if err := fs.Parse(args); err != nil {
 		return exitError

@@ -100,7 +100,7 @@ func (opts Options) prepare(rc plan.ResourceChange, op plan.Action, arnCtx mappi
 	if !u.arnExact {
 		u.addReason(finding.ReasonARNUnresolved)
 	}
-	if res.ResourcePolicyCapable {
+	if res.ResourcePolicyApplies(mapping.Operation(op)) {
 		u.addReason(finding.ReasonResourcePolicyNotEvaluated)
 	}
 	if res.RCPGoverned() {
