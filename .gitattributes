@@ -1,0 +1,19 @@
+# Normalise line endings in the repository to LF.
+#
+# This matters here rather than being housekeeping: CI runs the test matrix on
+# Linux, Windows and macOS, and `gofmt -l` is a build gate. Without this, a
+# checkout on Windows rewrites every file to CRLF and the formatting check fails
+# for reasons that have nothing to do with the code.
+* text=auto eol=lf
+
+# Terraform and Go tooling both assume LF.
+*.go      text eol=lf
+*.tf      text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+Makefile  text eol=lf
+
+# Test fixtures are compared byte-for-byte; never let them be rewritten.
+internal/plan/testdata/*.json -text
