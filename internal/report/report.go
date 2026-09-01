@@ -1,0 +1,270 @@
+// Package report renders a finding.Report in the output formats the spec calls
+// for: a human-readable CLI report, machine-readable JSON, and SARIF for GitHub
+// code scanning.
+package report
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+	"strings"
+	"text/tabwriter"
+
+	"github.com/Caleb-Kelly-25/preflight/internal/finding"
+)
+
+// Format is an output format.
+type Format string
+
+const (
+	FormatText  Format = "text"
+	FormatJSON  Format = "json"
+	FormatSARIF Format = "sarif"
+)
+
+// ParseFormat validates a --format value.
+func ParseFormat(s string) (Format, error) {
+	switch Format(s) {
+	case FormatText, FormatJSON, FormatSARIF:
+		return Format(s), nil
+	default:
+		return "", fmt.Errorf("unknown format %q (want text, json, or sarif)", s)
+	}
+}
+
+// SchemaVersion identifies the JSON output contract.
+//
+// Teams build dashboards on this, and they are exactly the users who later want
+// the platform layer — breaking their integration would be expensive twice over.
+// Bump the major only for a breaking change.
+const SchemaVersion = "1.0"
+
+// WriteOptions tunes rendering.
+type WriteOptions struct {
+	// Explain adds the supplied context, the simulated ARN, and each action's
+	// raw decision. It is the only mitigation available for the SCP diagnostic
+	// blind spot, where AWS deliberately withholds why an SCP denied.
+	Explain bool
+}
+
+// Write renders the report in the requested format.
+func Write(w io.Writer, r *finding.Report, f Format, opts WriteOptions) error {
+	switch f {
+	case FormatJSON:
+		return WriteJSON(w, r)
+	case FormatSARIF:
+		return WriteSARIF(w, r)
+	default:
+		return WriteText(w, r, opts)
+	}
+}
+
+// WriteJSON emits the machine-readable form, for teams building their own
+// dashboards or piping into other tooling.
+func WriteJSON(w io.Writer, r *finding.Report) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(struct {
+		SchemaVersion string `json:"schema_version"`
+		*finding.Report
+		Summary finding.Counts `json:"summary"`
+	}{SchemaVersion: SchemaVersion, Report: r, Summary: r.Counts()})
+}
+
+// ErrSARIFUnimplemented is returned by WriteSARIF until source-location
+// resolution exists.
+//
+// SARIF is only useful to GitHub if each result carries a file and line, and
+// Terraform's plan JSON carries no source locations at all — it identifies
+// resources by address ("aws_s3_bucket.logs"), not by position. Emitting SARIF
+// without locations would produce annotations GitHub cannot place inline, which
+// is worse than emitting nothing. Closing this needs an HCL pass over the
+// configuration to map address to file:line. See docs/ARCHITECTURE.md.
+var ErrSARIFUnimplemented = errors.New(
+	"sarif output is not implemented yet: it requires mapping resource addresses to source file and line, which the plan JSON does not provide (see docs/ARCHITECTURE.md)")
+
+// WriteSARIF is not yet implemented; see ErrSARIFUnimplemented.
+func WriteSARIF(io.Writer, *finding.Report) error {
+	return ErrSARIFUnimplemented
+}
+
+// WriteText renders the human-readable report, grouped by confidence level so
+// that what was actually verified is never visually conflated with what was not.
+func WriteText(w io.Writer, r *finding.Report, opts WriteOptions) error {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "preflight — IAM permission check\n")
+	if r.PrincipalARN != "" {
+		fmt.Fprintf(&b, "principal: %s\n", r.PrincipalARN)
+	}
+	b.WriteString("\n")
+
+	for _, warn := range r.Warnings {
+		fmt.Fprintf(&b, "  ! %s\n", warn)
+	}
+	if len(r.Warnings) > 0 {
+		b.WriteString("\n")
+	}
+
+	if len(r.Findings) == 0 {
+		b.WriteString("No AWS resource changes in this plan. Nothing to check.\n")
+		_, err := io.WriteString(w, b.String())
+		return err
+	}
+
+	// Denied findings first and on their own: they are the actionable ones.
+	var denied []finding.Finding
+	byLevel := map[finding.Level][]finding.Finding{}
+	for _, f := range r.Findings {
+		if f.Denied() {
+			denied = append(denied, f)
+			continue
+		}
+		byLevel[f.Level] = append(byLevel[f.Level], f)
+	}
+
+	if len(denied) > 0 {
+		fmt.Fprintf(&b, "MISSING PERMISSIONS (%d)\n", len(denied))
+		b.WriteString("This plan will fail at apply time.\n\n")
+		writeGroup(&b, denied, true, opts)
+	}
+
+	for _, lvl := range []finding.Level{finding.LevelVerified, finding.LevelLikely, finding.LevelUnchecked} {
+		group := byLevel[lvl]
+		if len(group) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "%s (%d)\n", strings.ToUpper(string(lvl)), len(group))
+		fmt.Fprintf(&b, "%s\n\n", levelBlurb(lvl))
+		writeGroup(&b, group, false, opts)
+	}
+
+	writeSuppressedNote(&b, r)
+
+	c := r.Counts()
+	fmt.Fprintf(&b, "summary: %d verified, %d likely, %d unchecked, %d with missing permissions\n",
+		c.Verified, c.Likely, c.Unchecked, c.Denied)
+
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
+// writeSuppressedNote explains denials we deliberately did not report.
+//
+// Without this a user who knows AWS said "no" would see preflight say nothing
+// and reasonably conclude the tool is broken. Saying why is what makes the
+// suppression trustworthy rather than suspicious.
+func writeSuppressedNote(b *strings.Builder, r *finding.Report) {
+	var n int
+	for _, f := range r.Findings {
+		n += len(f.SuppressedDenials())
+	}
+	if n == 0 {
+		return
+	}
+	fmt.Fprintf(b, "NOTE: %d denial(s) were not reported as missing permissions.\n", n)
+	b.WriteString("  AWS returned a denial, but the question we asked could not distinguish a real\n")
+	b.WriteString("  gap from an artefact of how we had to ask it — an unresolvable ARN, or a\n")
+	b.WriteString("  condition key we could not supply. Those findings are Unchecked, not passing.\n")
+	b.WriteString("  Run with --explain to see each one.\n\n")
+}
+
+func writeGroup(b *strings.Builder, fs []finding.Finding, showActions bool, opts WriteOptions) {
+	sort.SliceStable(fs, func(i, j int) bool {
+		if fs[i].ResourceAddress != fs[j].ResourceAddress {
+			return fs[i].ResourceAddress < fs[j].ResourceAddress
+		}
+		return fs[i].Operation < fs[j].Operation
+	})
+
+	tw := tabwriter.NewWriter(b, 0, 0, 2, ' ', 0)
+	for _, f := range fs {
+		fmt.Fprintf(tw, "  %s\t%s\t%s\n", f.ResourceAddress, f.Operation, reasonSummary(f))
+		if showActions {
+			for _, a := range f.MissingActions() {
+				fmt.Fprintf(tw, "  \t\t  missing: %s\n", a)
+			}
+		}
+		if opts.Explain {
+			writeExplain(tw, f)
+		}
+	}
+	_ = tw.Flush()
+	b.WriteString("\n")
+}
+
+// writeExplain shows exactly what we asked and what came back.
+func writeExplain(tw *tabwriter.Writer, f finding.Finding) {
+	if f.SimulatedARN != "" {
+		fmt.Fprintf(tw, "  \t\t  scoped to: %s\n", f.SimulatedARN)
+	}
+	for _, e := range f.SuppliedContext {
+		fmt.Fprintf(tw, "  \t\t  context: %s = %s\n", e.Key, strings.Join(e.Values, ","))
+	}
+	for _, k := range f.UnsuppliedContextKeys {
+		fmt.Fprintf(tw, "  \t\t  context: %s = (could not supply)\n", k)
+	}
+	for _, a := range f.Actions {
+		line := fmt.Sprintf("  \t\t  %s -> %s", a.Action, a.Decision)
+		if a.Inconclusive {
+			line += fmt.Sprintf(" (not acted on: %s)", reasonText(a.InconclusiveReason))
+		}
+		if len(a.MissingContextValues) > 0 {
+			line += fmt.Sprintf(" [missing: %s]", strings.Join(a.MissingContextValues, ", "))
+		}
+		fmt.Fprintln(tw, line)
+	}
+}
+
+func reasonSummary(f finding.Finding) string {
+	if len(f.Reasons) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(f.Reasons))
+	for _, r := range f.Reasons {
+		text := reasonText(r)
+		// Name the keys rather than leaving a vague hedge — a reason the reader
+		// cannot act on is a reason they learn to ignore.
+		if r == finding.ReasonConditionKeysUnknown && len(f.UnsuppliedContextKeys) > 0 {
+			text += ": " + strings.Join(f.UnsuppliedContextKeys, ", ")
+		}
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func reasonText(r finding.Reason) string {
+	switch r {
+	case finding.ReasonResourcePolicyNotEvaluated:
+		return "resource policy not evaluated"
+	case finding.ReasonRCPNotEvaluated:
+		return "RCPs not evaluated"
+	case finding.ReasonARNUnresolved:
+		return "ARN unknown until apply, checked against *"
+	case finding.ReasonConditionKeysUnknown:
+		return "policy conditions not evaluated"
+	case finding.ReasonMappingUnverified:
+		return "mapping entry not yet verified"
+	case finding.ReasonNoMapping:
+		return "resource type not in mapping database"
+	case finding.ReasonOperationNotMapped:
+		return "this operation not in mapping database"
+	case finding.ReasonSimulationFailed:
+		return "not simulated"
+	default:
+		return string(r)
+	}
+}
+
+func levelBlurb(l finding.Level) string {
+	switch l {
+	case finding.LevelVerified:
+		return "  Simulated against the identity policy with nothing left unevaluated."
+	case finding.LevelLikely:
+		return "  Identity policy allows these, but something that could still deny was not checked."
+	default:
+		return "  Not checked. Do not read these as safe."
+	}
+}

@@ -1,0 +1,53 @@
+# Build output
+/preflight
+/preflight.exe
+/bin/
+/dist/
+
+# Go
+*.test
+*.exe
+*.out
+coverage.*
+
+# Terraform working files. Plans and state can contain infrastructure detail
+# that should never end up in a public repo.
+*.tfplan
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+
+# Real plan output captured while testing against live infrastructure.
+# Fixtures under testdata/ are deliberately re-included below.
+plan.json
+*.plan.json
+
+# Contract-test fixture outputs — contain real account IDs and role ARNs
+testfixtures/aws/fixtures.json
+
+# Credentials
+.env
+.envrc
+*.pem
+credentials
+.claude
+
+# Documentation is kept out of the repository on purpose. The strategy and
+# design documents (GENERAL_DIRECTION.md, SPECS.md, docs/) are working material,
+# not deliverables, and they live on the author's machine only. README.md is the
+# single exception because it is the repository's public face.
+*.md
+!/README.md
+
+# Test fixtures are checked in on purpose
+!**/testdata/**
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
