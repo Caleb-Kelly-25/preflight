@@ -50,13 +50,26 @@ resources:
     operations:
       create:
         - iam:CreateRole
-        - iam:TagRole
+        # CreateRole takes tags as a parameter and IAM authorises iam:TagRole
+        # for them, with no TagRole call ever appearing. An untagged role needs
+        # neither.
+        - action: iam:TagRole
+          when: { attribute_set: tags }
       update:
-        - iam:UpdateRoleDescription
-        - iam:UpdateAssumeRolePolicy
-        - iam:TagRole
-        - iam:UpdateRole
-        - iam:UntagRole
+        - action: iam:UpdateRoleDescription
+          when: { attribute_changed: [description] }
+        # The UpdateRole API covers description AND max_session_duration.
+        # v5.100.0 used UpdateRoleDescription for a description change, but
+        # gating on both attributes stays correct if the provider ever switches
+        # — at the cost of asking for both on a description change.
+        - action: iam:UpdateRole
+          when: { attribute_changed: [description, max_session_duration] }
+        - action: iam:UpdateAssumeRolePolicy
+          when: { attribute_changed: [assume_role_policy] }
+        - action: iam:TagRole
+          when: { attribute_changed: [tags] }
+        - action: iam:UntagRole
+          when: { attribute_changed: [tags] }
       delete:
         - iam:DeleteRole
         - iam:ListInstanceProfilesForRole

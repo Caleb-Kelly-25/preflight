@@ -57,9 +57,14 @@ resources:
     operations:
       create:
         - s3:CreateBucket
-        - s3:PutBucketTagging
+        # The mirror of the IAM case: CreateBucket does NOT accept tags, so a
+        # tagged bucket needs a second, separately-authorised call. An untagged
+        # one needs neither.
+        - action: s3:PutBucketTagging
+          when: { attribute_set: tags }
       update:
-        - s3:PutBucketTagging
+        - action: s3:PutBucketTagging
+          when: { attribute_changed: [tags] }
       delete:
         - s3:DeleteBucket
 

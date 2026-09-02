@@ -40,7 +40,7 @@ resources:
 	if !ok {
 		t.Fatal("Actions() reported the type as unmapped")
 	}
-	if len(actions) != 1 || actions[0] != "example:CreateThing" {
+	if len(actions) != 1 || actions[0].Action != "example:CreateThing" {
 		t.Errorf("create actions = %v", actions)
 	}
 
@@ -183,10 +183,10 @@ func TestShippedDatabase(t *testing.T) {
 		// produces a permanently-denied simulation that looks like a real gap.
 		for op, actions := range r.Operations {
 			for _, a := range actions {
-				prefix, _, _ := strings.Cut(a, ":")
+				prefix, _, _ := strings.Cut(a.Action, ":")
 				if prefix != r.Service {
 					t.Errorf("%s %s: action %q does not use the declared service prefix %q",
-						typ, op, a, r.Service)
+						typ, op, a.Action, r.Service)
 				}
 			}
 		}

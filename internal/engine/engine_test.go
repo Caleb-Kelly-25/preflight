@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -630,6 +631,68 @@ resources:
 	del := findingFor(t, rep, "aws_iam_role.deploy", "delete")
 	requireLevel(t, del, finding.LevelLikely)
 	requireReason(t, del, finding.ReasonMappingUnverified)
+}
+
+// TestConditionalActionsFollowTheAttributes pins `when`. Demanding tagging
+// permissions for an untagged resource is a false positive, and a spurious red
+// check trains teams to bypass the tool — the mirror of the false-pass problem
+// and nearly as expensive.
+func TestConditionalActionsFollowTheAttributes(t *testing.T) {
+	doc := `
+resources:
+  - type: aws_s3_bucket
+    service: s3
+    status: draft
+    arn_format: "arn:${Partition}:s3:::${BucketName}"
+    arn_attributes: { BucketName: bucket }
+    operations:
+      create:
+        - s3:CreateBucket
+        - action: s3:PutBucketTagging
+          when: { attribute_set: tags }
+`
+	db, err := mapping.Load(fstest.MapFS{"t.yaml": &fstest.MapFile{Data: []byte(doc)}})
+	if err != nil {
+		t.Fatalf("loading database: %v", err)
+	}
+
+	p := planFromJSON(t, `{
+      "format_version": "1.2",
+      "terraform_version": "1.9.0",
+      "resource_changes": [
+        {"address":"aws_s3_bucket.tagged","mode":"managed","type":"aws_s3_bucket","name":"tagged",
+         "provider_name":"registry.terraform.io/hashicorp/aws",
+         "change":{"actions":["create"],"before":null,
+                   "after":{"bucket":"tagged-bkt","tags":{"env":"prod"}}}},
+        {"address":"aws_s3_bucket.plain","mode":"managed","type":"aws_s3_bucket","name":"plain",
+         "provider_name":"registry.terraform.io/hashicorp/aws",
+         "change":{"actions":["create"],"before":null,
+                   "after":{"bucket":"plain-bkt","tags":null}}}
+      ]}`)
+
+	sim := &fakeSimulator{}
+	analyzePlan(t, p, engine.Options{Database: db, Simulator: sim})
+
+	if len(sim.requests) != 1 {
+		t.Fatalf("expected one request, got %d", len(sim.requests))
+	}
+	got := map[string][]string{}
+	for _, item := range sim.requests[0].Items {
+		got[item.ResourceARN] = item.Actions
+	}
+
+	tagged := got["arn:aws:s3:::tagged-bkt"]
+	if !slices.Contains(tagged, "s3:PutBucketTagging") {
+		t.Errorf("tagged bucket did not ask for s3:PutBucketTagging; got %v", tagged)
+	}
+
+	plain := got["arn:aws:s3:::plain-bkt"]
+	if slices.Contains(plain, "s3:PutBucketTagging") {
+		t.Errorf("untagged bucket asked for s3:PutBucketTagging anyway; got %v", plain)
+	}
+	if !slices.Contains(plain, "s3:CreateBucket") {
+		t.Errorf("untagged bucket lost its unconditional action; got %v", plain)
+	}
 }
 
 func TestAnalyzeResourcePolicyAndRCPForceLikely(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -19,6 +20,56 @@ import (
 
 // Operation is a permission-relevant lifecycle operation on a resource.
 type Operation string
+
+// Action is one IAM action, optionally required only under a condition.
+//
+// It unmarshals from either a bare string or a mapping, so the flat v1 form
+// stays valid:
+//
+//	create: [iam:CreateRole]
+//	create:
+//	  - action: iam:CreateRole
+//	  - action: iam:TagRole
+//	    when: { attribute_set: tags }
+//
+// Keeping the simple form simple matters for contribution volume: most entries
+// need no conditions at all, and requiring the verbose shape everywhere would
+// tax every contributor to serve a minority of entries.
+type Action struct {
+	Action string     `yaml:"action"`
+	When   *Condition `yaml:"when,omitempty"`
+}
+
+// Condition narrows when an action is actually required.
+//
+// Deliberately just two forms, and deliberately not an expression language: a
+// contributor has to be able to check an entry by eye, and a reviewer has to be
+// able to tell whether it is right. Anything richer defeats the point of the
+// database being open and inspectable.
+type Condition struct {
+	// AttributeSet requires the action only when the named attribute has a
+	// value. An attribute that is configured but unknown until apply counts as
+	// set — it will have a value, we just cannot see it yet.
+	AttributeSet string `yaml:"attribute_set,omitempty"`
+	// AttributeChanged requires the action only when any named attribute
+	// differs between the prior and planned state.
+	AttributeChanged []string `yaml:"attribute_changed,omitempty"`
+}
+
+// UnmarshalYAML accepts the flat string form as sugar for {action: X}.
+func (a *Action) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		return value.Decode(&a.Action)
+	}
+	// A distinct type, or this recurses into itself.
+	type plain Action
+	var p plain
+	if err := value.Decode(&p); err != nil {
+		return err
+	}
+	*a = Action(p)
+	return nil
+}
 
 const (
 	OpCreate Operation = "create"
@@ -51,7 +102,7 @@ type Resource struct {
 	// plan, which forces a wildcard ARN and a downgraded confidence level.
 	ARNAttributes map[string]string `yaml:"arn_attributes,omitempty"`
 	// Operations lists the IAM actions each lifecycle operation requires.
-	Operations map[Operation][]string `yaml:"operations"`
+	Operations map[Operation][]Action `yaml:"operations"`
 
 	// ReadActions are required by EVERY operation, not one of them.
 	//
@@ -202,8 +253,17 @@ func (r Resource) validate() error {
 			return fmt.Errorf("%s: unknown operation %q", r.Type, op)
 		}
 		for _, a := range actions {
-			if !strings.Contains(a, ":") {
-				return fmt.Errorf("%s: action %q is not of the form service:Action", r.Type, a)
+			if !strings.Contains(a.Action, ":") {
+				return fmt.Errorf("%s: action %q is not of the form service:Action", r.Type, a.Action)
+			}
+			if a.When == nil {
+				continue
+			}
+			if a.When.AttributeSet == "" && len(a.When.AttributeChanged) == 0 {
+				return fmt.Errorf("%s: action %q has an empty `when`; omit it if the action is always required", r.Type, a.Action)
+			}
+			if a.When.AttributeSet != "" && len(a.When.AttributeChanged) > 0 {
+				return fmt.Errorf("%s: action %q sets both `attribute_set` and `attribute_changed`; use one", r.Type, a.Action)
 			}
 		}
 	}
@@ -355,12 +415,74 @@ func (d *Database) Lookup(resourceType string) (Resource, bool) {
 // Actions returns the IAM actions required for one operation on one resource
 // type. The second return value is false when the type is unmapped, which the
 // caller must surface as Unchecked rather than as a pass.
-func (d *Database) Actions(resourceType string, op Operation) ([]string, bool) {
+func (d *Database) Actions(resourceType string, op Operation) ([]Action, bool) {
 	r, ok := d.byType[resourceType]
 	if !ok {
 		return nil, false
 	}
 	return r.Operations[op], true
+}
+
+// RequiredActions returns the actions this operation needs for a resource with
+// these attributes, dropping conditional actions whose condition does not hold.
+//
+// `attrs` is the state the operation acts on (planned for create and update,
+// prior for delete) and `unknown` marks attributes whose values are not known
+// until apply. `before` and `after` are both needed for attribute_changed.
+//
+// Where a condition cannot be decided, the action is kept. That over-reports,
+// which produces a visible false positive rather than a silent false pass.
+func (r Resource) RequiredActions(op Operation, attrs, unknown, before, after map[string]any) []string {
+	acts := r.Operations[op]
+	out := make([]string, 0, len(acts))
+	for _, a := range acts {
+		if conditionHolds(a.When, attrs, unknown, before, after) {
+			out = append(out, a.Action)
+		}
+	}
+	return out
+}
+
+func conditionHolds(c *Condition, attrs, unknown, before, after map[string]any) bool {
+	if c == nil {
+		return true
+	}
+	if c.AttributeSet != "" {
+		// Configured but unknown until apply still means it will have a value.
+		if _, ok := unknown[c.AttributeSet]; ok {
+			return true
+		}
+		return isSet(attrs[c.AttributeSet])
+	}
+	for _, name := range c.AttributeChanged {
+		if _, ok := unknown[name]; ok {
+			return true // cannot tell; assume it changed
+		}
+		if !reflect.DeepEqual(before[name], after[name]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isSet reports whether an attribute carries a meaningful value. Terraform
+// renders unset attributes as null, and empty maps and lists are how "no tags"
+// and "no rules" arrive, so neither counts as set.
+func isSet(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case string:
+		return t != ""
+	case map[string]any:
+		return len(t) > 0
+	case []any:
+		return len(t) > 0
+	case bool:
+		return t
+	default:
+		return true
+	}
 }
 
 // Types lists every mapped resource type, sorted.

@@ -74,13 +74,23 @@ func (opts Options) prepare(rc plan.ResourceChange, op plan.Action, arnCtx mappi
 	}
 	u.res, u.mapped = res, true
 
-	actions := res.Operations[mapping.Operation(op)]
-	if len(actions) == 0 {
+	if len(res.Operations[mapping.Operation(op)]) == 0 {
 		// The type is mapped but this operation is not. Still a coverage gap,
 		// not a pass.
 		u.addReason(finding.ReasonOperationNotMapped)
 		return u
 	}
+
+	// Deletes act on the prior state, creates and updates on the planned state.
+	attrs, unknown := rc.Change.After, rc.Change.AfterUnknown
+	if op == plan.ActionDelete {
+		attrs, unknown = rc.Change.Before, nil
+	}
+
+	// Conditional actions are filtered against the actual attributes, so an
+	// untagged resource is not asked for tagging permissions it will never use.
+	actions := res.RequiredActions(mapping.Operation(op), attrs, unknown, rc.Change.Before, rc.Change.After)
+
 	// Every operation also needs the resource's read set: Terraform reads a
 	// resource back after writing it, and a missing read permission fails the
 	// apply just as surely as a missing write one. Copied rather than appended
@@ -89,12 +99,6 @@ func (opts Options) prepare(rc plan.ResourceChange, op plan.Action, arnCtx mappi
 	combined = append(combined, actions...)
 	combined = append(combined, res.ReadActions...)
 	u.actions = dedupeSorted(combined)
-
-	// Deletes act on the prior state, creates and updates on the planned state.
-	attrs, unknown := rc.Change.After, rc.Change.AfterUnknown
-	if op == plan.ActionDelete {
-		attrs, unknown = rc.Change.Before, nil
-	}
 
 	u.arn, u.arnExact = res.BuildARN(arnCtx, attrs, unknown)
 	if !u.arnExact {
