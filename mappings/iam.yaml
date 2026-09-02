@@ -35,22 +35,55 @@ resources:
     context_keys:
       "aws:RequestTag/*":
         from: tags
+
+    # Terraform reads the role back after every write. Derived empirically
+    # 2026-09-01 against provider v5.100.0: removing any one of these fails both
+    # apply and destroy.
+    read_actions:
+      - iam:GetRole
+      - iam:ListRolePolicies
+      - iam:ListAttachedRolePolicies
+
     operations:
       create:
         - iam:CreateRole
         - iam:TagRole
       update:
-        - iam:UpdateRole
+        - iam:UpdateRoleDescription
         - iam:UpdateAssumeRolePolicy
         - iam:TagRole
+        - iam:UpdateRole
         - iam:UntagRole
       delete:
         - iam:DeleteRole
+        - iam:ListInstanceProfilesForRole
     notes: >-
-      iam:TagRole is only required when tags are set, and the update actions
-      depend on which attributes changed. Conditional actions are not yet
-      modelled by the schema, so this over-reports required permissions; see
-      docs/ARCHITECTURE.md, open question 3.
+      Create and delete were established empirically on 2026-09-01 against
+      provider v5.100.0: a role holding exactly iam:CreateRole, iam:TagRole,
+      iam:DeleteRole plus the three read_actions and
+      iam:ListInstanceProfilesForRole applies and destroys a tagged role, and
+      removing any one of those seven fails. The previous entry listed three of
+      them and was wrong in the dangerous direction.
+
+      iam:TagRole is required on create even though no TagRole API call is made:
+      CreateRole accepts tags as a parameter and IAM authorises iam:TagRole for
+      them. It does not appear in CloudTrail, which is why observing API calls
+      is not by itself a sound way to derive an action list.
+
+      iam:ListInstanceProfilesForRole is needed only on delete — the provider
+      checks for attached instance profiles before removing a role.
+
+      STILL DRAFT, and the reason is the update path. Changing description,
+      trust policy and a tag value needs iam:UpdateRoleDescription (which the
+      previous entry omitted), iam:UpdateAssumeRolePolicy and iam:TagRole;
+      measured minimal for that shape. iam:UpdateRole and iam:UntagRole were
+      measured NOT needed for it and are retained because other shapes — a
+      max_session_duration change, a tag removal — plainly do need them, which
+      is reasoning rather than measurement. Attribute shapes the fixture never
+      exercised may need actions nobody has listed; a permissions boundary would
+      need iam:PutRolePermissionsBoundary, which is absent here. Completeness
+      for update is therefore unproven, and one status field cannot say that
+      create is verified while update is not.
 
       Separately: any OTHER resource that hands this role to a service (an ECS
       task definition, a Lambda function) needs iam:PassRole on it. That is a
