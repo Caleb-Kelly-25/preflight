@@ -97,6 +97,32 @@ resources:
     status: verified
     source: "   "
     operations: {create: [s3:CreateBucket]}`,
+		// Partial verification is still a verification claim, so it carries the
+		// same requirement to say where it came from.
+		"verified_operations without source": `
+resources:
+  - type: aws_thing
+    service: s3
+    status: draft
+    verified_operations: [create]
+    operations: {create: [s3:CreateBucket]}`,
+		"verified_operations alongside status verified": `
+resources:
+  - type: aws_thing
+    service: s3
+    status: verified
+    source: https://example.invalid/x
+    verified_operations: [create]
+    operations: {create: [s3:CreateBucket]}`,
+		// Claiming an unmapped operation is proven is a claim about nothing.
+		"verified_operations names an unmapped operation": `
+resources:
+  - type: aws_thing
+    service: s3
+    status: draft
+    source: https://example.invalid/x
+    verified_operations: [delete]
+    operations: {create: [s3:CreateBucket]}`,
 	}
 
 	for name, doc := range tests {

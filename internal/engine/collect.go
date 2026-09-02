@@ -106,7 +106,7 @@ func (opts Options) prepare(rc plan.ResourceChange, op plan.Action, arnCtx mappi
 	if res.RCPGoverned() {
 		u.addReason(finding.ReasonRCPNotEvaluated)
 	}
-	if !res.Verified() {
+	if !res.VerifiedFor(mapping.Operation(op)) {
 		u.addReason(finding.ReasonMappingUnverified)
 	}
 

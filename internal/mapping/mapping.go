@@ -94,7 +94,23 @@ type Resource struct {
 	ContextKeys map[string]ContextKeySource `yaml:"context_keys,omitempty"`
 
 	Status Status `yaml:"status"`
-	Notes  string `yaml:"notes,omitempty"`
+
+	// VerifiedOperations lists operations proven complete when the entry as a
+	// whole is not.
+	//
+	// Verification is empirical and per-operation: proving that a create
+	// succeeds with exactly the mapped actions says nothing about update, whose
+	// required actions depend on which attributes changed. Without this field
+	// the only honest status for a partly-proven entry is `draft`, which
+	// discards real work — aws_iam_role's create and delete were established
+	// against provider v5.100.0 and then had to be recorded as unproven because
+	// update was not.
+	//
+	// Only meaningful with `status: draft`; `status: verified` already means
+	// every operation is verified.
+	VerifiedOperations []Operation `yaml:"verified_operations,omitempty"`
+
+	Notes string `yaml:"notes,omitempty"`
 	// Source is where the action list was derived from, so a reviewer can
 	// re-check it.
 	Source string `yaml:"source,omitempty"`
@@ -161,8 +177,23 @@ func (r Resource) validate() error {
 	// finding reach Verified rather than being capped at Likely. A claim with
 	// nothing behind it is worse than no claim, so the reviewer's starting point
 	// is required rather than merely conventional.
-	if r.Status == StatusVerified && strings.TrimSpace(r.Source) == "" {
-		return fmt.Errorf("%s: status %q requires a `source` URL recording how the action list was established", r.Type, StatusVerified)
+	if (r.Status == StatusVerified || len(r.VerifiedOperations) > 0) && strings.TrimSpace(r.Source) == "" {
+		return fmt.Errorf("%s: claiming verification requires a `source` URL recording how the action list was established", r.Type)
+	}
+	if r.Status == StatusVerified && len(r.VerifiedOperations) > 0 {
+		return fmt.Errorf("%s: `verified_operations` is redundant with status %q, which already covers every operation", r.Type, StatusVerified)
+	}
+	for _, op := range r.VerifiedOperations {
+		switch op {
+		case OpCreate, OpUpdate, OpDelete:
+		default:
+			return fmt.Errorf("%s: verified_operations lists unknown operation %q", r.Type, op)
+		}
+		// Claiming an operation is verified when the entry does not map it at
+		// all would be a claim about nothing.
+		if len(r.Operations[op]) == 0 {
+			return fmt.Errorf("%s: verified_operations lists %q, which the entry does not map", r.Type, op)
+		}
 	}
 	for op, actions := range r.Operations {
 		switch op {
@@ -297,9 +328,23 @@ func (r Resource) ResourcePolicyApplies(op Operation) bool {
 	return false
 }
 
-// Verified reports whether the entry has been checked against AWS's Service
-// Authorization Reference. Draft entries cap findings at Likely.
+// Verified reports whether every operation on the entry is proven.
 func (r Resource) Verified() bool { return r.Status == StatusVerified }
+
+// VerifiedFor reports whether this specific operation is proven, either because
+// the whole entry is verified or because the operation is listed individually.
+// An unproven operation caps its findings at Likely.
+func (r Resource) VerifiedFor(op Operation) bool {
+	if r.Verified() {
+		return true
+	}
+	for _, o := range r.VerifiedOperations {
+		if o == op {
+			return true
+		}
+	}
+	return false
+}
 
 // Lookup returns the mapping for a Terraform resource type.
 func (d *Database) Lookup(resourceType string) (Resource, bool) {

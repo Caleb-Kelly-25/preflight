@@ -28,6 +28,9 @@ resources:
   - type: aws_iam_role
     service: iam
     status: draft
+    # Create and delete were established empirically against provider v5.100.0
+    # on 2026-09-01; update was not. See notes.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
     arn_attributes:

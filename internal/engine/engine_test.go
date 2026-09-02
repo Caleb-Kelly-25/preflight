@@ -593,6 +593,45 @@ func TestAnalyzeDraftMappingCapsAtLikely(t *testing.T) {
 	requireReason(t, f, finding.ReasonMappingUnverified)
 }
 
+// TestVerificationIsPerOperation pins the reason verified_operations exists.
+// Verification is empirical and per-operation: proving a create succeeds with
+// exactly the mapped actions says nothing about update, whose actions depend on
+// which attributes changed. Before this, a partly-proven entry had to be
+// recorded as wholly draft, which threw away real work — and the entry that
+// forced the issue, aws_iam_role, had create and delete established while
+// update remained unproven.
+func TestVerificationIsPerOperation(t *testing.T) {
+	doc := `
+resources:
+  - type: aws_iam_role
+    service: iam
+    status: draft
+    verified_operations: [create]
+    source: https://example.invalid/test-fixture
+    arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
+    arn_attributes: { RoleName: name }
+    operations:
+      create: [iam:CreateRole]
+      delete: [iam:DeleteRole]
+`
+	db, err := mapping.Load(fstest.MapFS{"t.yaml": &fstest.MapFile{Data: []byte(doc)}})
+	if err != nil {
+		t.Fatalf("loading database: %v", err)
+	}
+	rep := analyze(t, engine.Options{Database: db, Simulator: &fakeSimulator{}})
+
+	create := findingFor(t, rep, "aws_iam_role.deploy", "create")
+	requireLevel(t, create, finding.LevelVerified)
+	if hasReason(create, finding.ReasonMappingUnverified) {
+		t.Error("create is listed in verified_operations but still reports the mapping as unverified")
+	}
+
+	// The unproven operation must not inherit the proven one's standing.
+	del := findingFor(t, rep, "aws_iam_role.deploy", "delete")
+	requireLevel(t, del, finding.LevelLikely)
+	requireReason(t, del, finding.ReasonMappingUnverified)
+}
+
 func TestAnalyzeResourcePolicyAndRCPForceLikely(t *testing.T) {
 	rep := analyze(t, engine.Options{
 		Database:  testDB(t, "verified"),

@@ -353,21 +353,37 @@ func runMappings(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 	types := db.Types()
-	var verified int
+	var verified, partial int
 	for _, t := range types {
 		r, _ := db.Lookup(t)
-		if r.Verified() {
+		switch {
+		case r.Verified():
 			verified++
+		case len(r.VerifiedOperations) > 0:
+			partial++
 		}
+		// Mark each operation with whether it is proven, so a partly-verified
+		// entry reads as what it is rather than rounding to draft.
 		ops := make([]string, 0, len(r.Operations))
 		for _, op := range []mapping.Operation{mapping.OpCreate, mapping.OpUpdate, mapping.OpDelete} {
-			if len(r.Operations[op]) > 0 {
+			if len(r.Operations[op]) == 0 {
+				continue
+			}
+			if r.VerifiedFor(op) {
+				ops = append(ops, string(op)+"*")
+			} else {
 				ops = append(ops, string(op))
 			}
 		}
-		fmt.Fprintf(stdout, "%-52s %-8s %s\n", t, r.Status, strings.Join(ops, ","))
+		status := string(r.Status)
+		if !r.Verified() && len(r.VerifiedOperations) > 0 {
+			status = "partial"
+		}
+		fmt.Fprintf(stdout, "%-52s %-8s %s\n", t, status, strings.Join(ops, ","))
 	}
-	fmt.Fprintf(stdout, "\n%d resource types mapped, %d verified\n", len(types), verified)
+	fmt.Fprintf(stdout, "\n%d resource types mapped, %d verified, %d partially verified\n",
+		len(types), verified, partial)
+	fmt.Fprintln(stdout, "* marks an operation established empirically; unmarked operations cap findings at Likely")
 	return exitOK
 }
 
