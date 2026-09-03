@@ -15,6 +15,80 @@ type ARNContext struct {
 	Region    string
 }
 
+// ReferencedAction is one action required against another resource's ARN.
+type ReferencedAction struct {
+	Action string
+	ARN    string
+	// Exact is false when the referenced ARN could not be resolved, in which
+	// case ARN is "*" and any denial is inconclusive — same rule as BuildARN.
+	Exact bool
+}
+
+// ResolveReferences returns the cross-resource actions this operation needs,
+// each paired with the ARN it must be evaluated against.
+func (r Resource) ResolveReferences(op Operation, ctx ARNContext, attrs, unknown, before, after map[string]any) []ReferencedAction {
+	var out []ReferencedAction
+	for _, ref := range r.References {
+		if !ref.AppliesTo(op) {
+			continue
+		}
+		if !conditionHolds(ref.When, attrs, unknown, before, after) {
+			continue
+		}
+		arn, exact := ref.buildARN(ctx, attrs, unknown)
+		out = append(out, ReferencedAction{Action: ref.Action, ARN: arn, Exact: exact})
+	}
+	return out
+}
+
+// buildARN resolves the referenced resource's ARN. The attribute usually holds
+// a complete ARN already (aws_lambda_function.role); ARNFormat covers the case
+// where it holds a bare name instead (aws_iam_instance_profile.role).
+func (ref Reference) buildARN(ctx ARNContext, attrs, unknown map[string]any) (string, bool) {
+	if isUnknown(unknown, ref.ARNFrom) {
+		return "*", false
+	}
+	v, ok := attrs[ref.ARNFrom].(string)
+	if !ok || v == "" {
+		return "*", false
+	}
+	if ref.ARNFormat == "" {
+		return v, true
+	}
+
+	resolved := true
+	out := varPattern.ReplaceAllStringFunc(ref.ARNFormat, func(match string) string {
+		switch varPattern.FindStringSubmatch(match)[1] {
+		case "Name":
+			return v
+		case "Partition":
+			if ctx.Partition == "" {
+				resolved = false
+				return match
+			}
+			return ctx.Partition
+		case "Account":
+			if ctx.Account == "" {
+				resolved = false
+				return match
+			}
+			return ctx.Account
+		case "Region":
+			if ctx.Region == "" {
+				resolved = false
+				return match
+			}
+			return ctx.Region
+		}
+		resolved = false
+		return match
+	})
+	if !resolved {
+		return "*", false
+	}
+	return out, true
+}
+
 // BuildARN fills the resource's ARN template from the planned attributes.
 //
 // It reports exact=false when any placeholder could not be resolved — because

@@ -97,11 +97,15 @@ func Analyze(ctx context.Context, p *plan.Plan, opts Options) (*finding.Report, 
 
 	rep.Findings = make([]finding.Finding, 0, len(units))
 	for _, u := range units {
-		var out ItemOutcome
-		if u.reqIndex >= 0 && u.reqIndex < len(outcomes) {
-			out = outcomes[u.reqIndex]
+		// One outcome per group, index-aligned with u.groups so classify can
+		// tell which ARN each result belongs to.
+		outs := make([]ItemOutcome, len(u.groups))
+		for i, g := range u.groups {
+			if g.reqIndex >= 0 && g.reqIndex < len(outcomes) {
+				outs[i] = outcomes[g.reqIndex]
+			}
 		}
-		rep.Findings = append(rep.Findings, classify(u, out, simulated))
+		rep.Findings = append(rep.Findings, classify(u, outs, simulated))
 	}
 	return rep, nil
 }

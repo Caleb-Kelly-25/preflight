@@ -167,10 +167,33 @@ resources:
     operations:
       create:
         - iam:CreateInstanceProfile
-        - iam:AddRoleToInstanceProfile
+        - action: iam:AddRoleToInstanceProfile
+          when: { attribute_set: role }
       update:
-        - iam:AddRoleToInstanceProfile
-        - iam:RemoveRoleFromInstanceProfile
+        - action: iam:AddRoleToInstanceProfile
+          when: { attribute_changed: [role] }
+        - action: iam:RemoveRoleFromInstanceProfile
+          when: { attribute_changed: [role] }
       delete:
         - iam:DeleteInstanceProfile
-        - iam:RemoveRoleFromInstanceProfile
+        - action: iam:RemoveRoleFromInstanceProfile
+          when: { attribute_set: role }
+    # MEASURED 2026-09-02. AddRoleToInstanceProfile requires iam:PassRole
+    # against the ROLE being added, not against the instance profile:
+    #
+    #   AccessDenied ... not authorized to perform: iam:PassRole
+    #   on resource: arn:aws:iam::<acct>:role/<target>
+    #
+    # Granting the five instance-profile actions alone is not enough, and this
+    # entry claimed exactly that until now — a false "allowed" for a deploy that
+    # cannot succeed. AWS's own docs associate PassRole with launching an
+    # instance rather than with building the profile, so reading them would have
+    # produced the same wrong answer.
+    #
+    # `role` holds a role NAME here, not an ARN, hence arn_format.
+    references:
+      - action: iam:PassRole
+        arn_from: role
+        arn_format: "arn:${Partition}:iam::${Account}:role/${Name}"
+        operations: [create, update]
+        when: { attribute_set: role }

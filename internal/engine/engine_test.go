@@ -695,6 +695,122 @@ resources:
 	}
 }
 
+// TestReferencesAreCheckedAgainstTheOtherResource pins `references`, and with
+// it the engine's ability to ask about more than one ARN for a single change.
+// iam:PassRole is authorised against the role being handed over, so checking it
+// against the resource doing the handing would ask AWS the wrong question and
+// get a confident, wrong answer.
+func TestReferencesAreCheckedAgainstTheOtherResource(t *testing.T) {
+	doc := `
+resources:
+  - type: aws_iam_instance_profile
+    service: iam
+    status: draft
+    arn_format: "arn:${Partition}:iam::${Account}:instance-profile/${ProfileName}"
+    arn_attributes: { ProfileName: name }
+    operations:
+      create: [iam:CreateInstanceProfile, iam:AddRoleToInstanceProfile]
+    references:
+      - action: iam:PassRole
+        arn_from: role
+        arn_format: "arn:${Partition}:iam::${Account}:role/${Name}"
+        operations: [create]
+        when: { attribute_set: role }
+`
+	db, err := mapping.Load(fstest.MapFS{"t.yaml": &fstest.MapFile{Data: []byte(doc)}})
+	if err != nil {
+		t.Fatalf("loading database: %v", err)
+	}
+	p := planFromJSON(t, `{
+      "format_version": "1.2",
+      "terraform_version": "1.9.0",
+      "resource_changes": [{
+        "address":"aws_iam_instance_profile.app","mode":"managed",
+        "type":"aws_iam_instance_profile","name":"app",
+        "provider_name":"registry.terraform.io/hashicorp/aws",
+        "change":{"actions":["create"],"before":null,
+                  "after":{"name":"app-profile","role":"app-role"}}}]}`)
+
+	sim := &fakeSimulator{}
+	rep := analyzePlan(t, p, engine.Options{Database: db, Simulator: sim})
+
+	byARN := map[string][]string{}
+	for _, item := range sim.requests[0].Items {
+		byARN[item.ResourceARN] = item.Actions
+	}
+
+	// The profile's own actions go against the profile.
+	profile := byARN["arn:aws:iam::123456789012:instance-profile/app-profile"]
+	if !slices.Contains(profile, "iam:CreateInstanceProfile") {
+		t.Errorf("profile ARN missing its own actions; got %v", profile)
+	}
+	if slices.Contains(profile, "iam:PassRole") {
+		t.Errorf("iam:PassRole was checked against the instance profile, not the role; got %v", profile)
+	}
+
+	// PassRole goes against the role being passed, built from a bare name.
+	role := byARN["arn:aws:iam::123456789012:role/app-role"]
+	if !slices.Contains(role, "iam:PassRole") {
+		t.Errorf("iam:PassRole was not checked against the referenced role; items were %v", byARN)
+	}
+
+	// And the finding still reports both, as one result set for one change.
+	f := findingFor(t, rep, "aws_iam_instance_profile.app", "create")
+	var sawPassRole bool
+	for _, a := range f.Actions {
+		if a.Action == "iam:PassRole" {
+			sawPassRole = true
+			if a.ResourceARN != "arn:aws:iam::123456789012:role/app-role" {
+				t.Errorf("iam:PassRole reported against %q", a.ResourceARN)
+			}
+		}
+	}
+	if !sawPassRole {
+		t.Error("finding does not mention iam:PassRole at all")
+	}
+}
+
+// A reference whose target ARN cannot be resolved must not quietly vanish: it
+// is asked against "*" and caveated, the same rule as the resource's own ARN.
+func TestUnresolvedReferenceDowngrades(t *testing.T) {
+	doc := `
+resources:
+  - type: aws_iam_instance_profile
+    service: iam
+    status: verified
+    source: https://example.invalid/x
+    arn_format: "arn:${Partition}:iam::${Account}:instance-profile/${ProfileName}"
+    arn_attributes: { ProfileName: name }
+    operations:
+      create: [iam:CreateInstanceProfile]
+    references:
+      - action: iam:PassRole
+        arn_from: role
+        arn_format: "arn:${Partition}:iam::${Account}:role/${Name}"
+`
+	db, err := mapping.Load(fstest.MapFS{"t.yaml": &fstest.MapFile{Data: []byte(doc)}})
+	if err != nil {
+		t.Fatalf("loading database: %v", err)
+	}
+	p := planFromJSON(t, `{
+      "format_version": "1.2",
+      "terraform_version": "1.9.0",
+      "resource_changes": [{
+        "address":"aws_iam_instance_profile.app","mode":"managed",
+        "type":"aws_iam_instance_profile","name":"app",
+        "provider_name":"registry.terraform.io/hashicorp/aws",
+        "change":{"actions":["create"],"before":null,
+                  "after":{"name":"app-profile"},
+                  "after_unknown":{"role":true}}}]}`)
+
+	rep := analyzePlan(t, p, engine.Options{Database: db, Simulator: &fakeSimulator{}})
+	f := findingFor(t, rep, "aws_iam_instance_profile.app", "create")
+	requireReason(t, f, finding.ReasonARNUnresolved)
+	if f.Level == finding.LevelVerified {
+		t.Error("an unresolved PassRole target still produced Verified")
+	}
+}
+
 func TestAnalyzeResourcePolicyAndRCPForceLikely(t *testing.T) {
 	rep := analyze(t, engine.Options{
 		Database:  testDB(t, "verified"),

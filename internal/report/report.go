@@ -208,6 +208,12 @@ func writeExplain(tw *tabwriter.Writer, f finding.Finding) {
 	}
 	for _, a := range f.Actions {
 		line := fmt.Sprintf("  \t\t  %s -> %s", a.Action, a.Decision)
+		// A cross-resource action such as iam:PassRole is authorised against
+		// the resource being handed over, not against the one being changed.
+		// Showing the finding's own ARN for it would state the wrong scope.
+		if a.ResourceARN != "" && a.ResourceARN != f.SimulatedARN {
+			line += fmt.Sprintf(" (on %s)", a.ResourceARN)
+		}
 		if a.Inconclusive {
 			line += fmt.Sprintf(" (not acted on: %s)", reasonText(a.InconclusiveReason))
 		}

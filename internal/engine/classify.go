@@ -6,7 +6,7 @@ import "github.com/Caleb-Kelly-25/preflight/internal/finding"
 //
 // Pure, and deliberately so: this is the logic that must never be wrong, and it
 // is exercised entirely without credentials. See docs/DESIGN.md §3.
-func classify(u unit, out ItemOutcome, simulated bool) finding.Finding {
+func classify(u unit, outs []ItemOutcome, simulated bool) finding.Finding {
 	f := finding.Finding{
 		ResourceAddress:       u.address,
 		ResourceType:          u.resourceType,
@@ -21,21 +21,30 @@ func classify(u unit, out ItemOutcome, simulated bool) finding.Finding {
 
 	// Decided without simulating: unmapped type or unmapped operation. Both
 	// already carry their reason from prepare.
-	if !u.mapped || len(u.actions) == 0 {
+	if !u.mapped || len(u.allActions()) == 0 {
 		f.Level = finding.LevelUnchecked
 		return f
 	}
 
-	// No simulator configured, or this item's batch never completed. Either way
-	// nothing was evaluated, and nothing unevaluated may present as safe.
-	if !simulated || u.reqIndex < 0 || out.Err != nil {
+	// No simulator, or any one of this unit's questions went unanswered. A unit
+	// spanning several ARNs is only as checked as its least-checked group: if
+	// the iam:PassRole question failed, the deploy is not verified however well
+	// the resource's own actions came back.
+	if !simulated || !allAnswered(u, outs) {
 		f.Level = finding.LevelUnchecked
 		f.AddReason(finding.ReasonSimulationFailed)
-		f.Actions = notSimulated(u.actions, u.arn)
+		f.Actions = notSimulatedGroups(u)
 		return f
 	}
 
-	f.Actions = markInconclusive(out.Results, u)
+	var results []finding.ActionResult
+	for i, g := range u.groups {
+		if len(g.actions) == 0 {
+			continue
+		}
+		results = append(results, markInconclusive(outs[i].Results, g)...)
+	}
+	f.Actions = results
 
 	// A result naming a missing context value tells us a key was in play that
 	// we did not supply, even when prepare could not predict it.
@@ -50,9 +59,34 @@ func classify(u unit, out ItemOutcome, simulated bool) finding.Finding {
 	return f
 }
 
+// allAnswered reports whether every group that consumed a request slot came
+// back usable. Anything else means part of this unit was not evaluated.
+func allAnswered(u unit, outs []ItemOutcome) bool {
+	for i, g := range u.groups {
+		if len(g.actions) == 0 {
+			continue
+		}
+		if g.reqIndex < 0 || i >= len(outs) || outs[i].Err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func notSimulatedGroups(u unit) []finding.ActionResult {
+	var out []finding.ActionResult
+	for _, g := range u.groups {
+		out = append(out, notSimulated(g.actions, g.arn)...)
+	}
+	return out
+}
+
 // markInconclusive flags the decisions we measured to be untrustworthy. Both
 // cases are denials that prove something narrower than they appear to.
-func markInconclusive(results []finding.ActionResult, u unit) []finding.ActionResult {
+//
+// Exactness is per group, not per unit: a resource's own ARN can be known while
+// the role it passes is not, or the reverse.
+func markInconclusive(results []finding.ActionResult, g actionGroup) []finding.ActionResult {
 	out := make([]finding.ActionResult, len(results))
 	copy(out, results)
 
@@ -67,7 +101,7 @@ func markInconclusive(results []finding.ActionResult, u unit) []finding.ActionRe
 			out[i].Inconclusive = true
 			out[i].InconclusiveReason = finding.ReasonConditionKeysUnknown
 
-		case !u.arnExact:
+		case !g.exact:
 			// E1, E5: ResourceArns "*" does not match an ARN-scoped policy, so
 			// the denial proves only that the policy is scoped — not that the
 			// real ARN falls outside that scope. Reporting it as a missing

@@ -17,10 +17,20 @@ type unit struct {
 	resourceType string
 	operation    string
 
-	res     mapping.Resource
-	mapped  bool
-	actions []string
+	res    mapping.Resource
+	mapped bool
 
+	// groups are the questions this unit needs answered. groups[0] is always
+	// the resource's own ARN; any further groups come from `references` and
+	// target a DIFFERENT resource — iam:PassRole is checked against the role
+	// being handed over, not against the thing doing the handing.
+	//
+	// One unit therefore spans several request items, which is why the engine
+	// cannot assume a unit maps to exactly one.
+	groups []actionGroup
+
+	// arn and arnExact describe the resource's own ARN, kept separately because
+	// they are what the finding reports and what the ARN caveat is about.
 	arn      string
 	arnExact bool
 
@@ -29,12 +39,27 @@ type unit struct {
 
 	// reasons are the caveats knowable without simulating.
 	reasons []finding.Reason
+}
 
-	// reqIndex is this unit's position in Request.Items, or -1 when the unit
-	// was decided without simulating (unmapped type, unmapped operation, no
-	// simulator). Those consume no request slot, so resources we were never
-	// going to check do not dilute batching.
+// actionGroup is one set of actions to evaluate against one ARN.
+type actionGroup struct {
+	actions []string
+	arn     string
+	exact   bool
+	// reqIndex is this group's position in Request.Items, or -1 when it was
+	// decided without simulating. Groups that consume no slot do not dilute
+	// batching.
 	reqIndex int
+}
+
+// allActions is every action across every group, for the decided-without-
+// simulating paths.
+func (u unit) allActions() []string {
+	var out []string
+	for _, g := range u.groups {
+		out = append(out, g.actions...)
+	}
+	return out
 }
 
 func (u *unit) addReason(r finding.Reason) {
@@ -64,7 +89,6 @@ func (opts Options) prepare(rc plan.ResourceChange, op plan.Action, arnCtx mappi
 		address:      rc.Address,
 		resourceType: rc.Type,
 		operation:    string(op),
-		reqIndex:     -1,
 	}
 
 	res, mapped := opts.Database.Lookup(rc.Type)
@@ -98,11 +122,44 @@ func (opts Options) prepare(rc plan.ResourceChange, op plan.Action, arnCtx mappi
 	combined := make([]string, 0, len(actions)+len(res.ReadActions))
 	combined = append(combined, actions...)
 	combined = append(combined, res.ReadActions...)
-	u.actions = dedupeSorted(combined)
 
 	u.arn, u.arnExact = res.BuildARN(arnCtx, attrs, unknown)
 	if !u.arnExact {
 		u.addReason(finding.ReasonARNUnresolved)
+	}
+	u.groups = []actionGroup{{
+		actions:  dedupeSorted(combined),
+		arn:      u.arn,
+		exact:    u.arnExact,
+		reqIndex: -1,
+	}}
+
+	// Cross-resource requirements are evaluated against the resource they point
+	// at, so each distinct referenced ARN becomes its own question. Actions
+	// sharing an ARN are grouped, so a resource passing the same role twice
+	// costs one item rather than two.
+	byARN := map[string][]string{}
+	exactByARN := map[string]bool{}
+	var arnOrder []string
+	for _, ref := range res.ResolveReferences(mapping.Operation(op), arnCtx, attrs, unknown, rc.Change.Before, rc.Change.After) {
+		if _, seen := byARN[ref.ARN]; !seen {
+			arnOrder = append(arnOrder, ref.ARN)
+			exactByARN[ref.ARN] = ref.Exact
+		}
+		byARN[ref.ARN] = append(byARN[ref.ARN], ref.Action)
+	}
+	for _, arn := range arnOrder {
+		if !exactByARN[arn] {
+			// Same rule as the resource's own ARN: a wildcard cannot prove an
+			// ARN-scoped policy allows the real target.
+			u.addReason(finding.ReasonARNUnresolved)
+		}
+		u.groups = append(u.groups, actionGroup{
+			actions:  dedupeSorted(byARN[arn]),
+			arn:      arn,
+			exact:    exactByARN[arn],
+			reqIndex: -1,
+		})
 	}
 	if res.ResourcePolicyApplies(mapping.Operation(op)) {
 		u.addReason(finding.ReasonResourcePolicyNotEvaluated)
@@ -132,15 +189,21 @@ func buildRequest(units []unit, policySourceARN string) Request {
 	req := Request{PolicySourceARN: policySourceARN}
 	for i := range units {
 		u := &units[i]
-		if !u.mapped || len(u.actions) == 0 {
+		if !u.mapped {
 			continue
 		}
-		u.reqIndex = len(req.Items)
-		req.Items = append(req.Items, RequestItem{
-			Actions:     u.actions,
-			ResourceARN: u.arn,
-			Context:     u.supplied,
-		})
+		for g := range u.groups {
+			grp := &u.groups[g]
+			if len(grp.actions) == 0 {
+				continue
+			}
+			grp.reqIndex = len(req.Items)
+			req.Items = append(req.Items, RequestItem{
+				Actions:     grp.actions,
+				ResourceARN: grp.arn,
+				Context:     u.supplied,
+			})
+		}
 	}
 	return req
 }

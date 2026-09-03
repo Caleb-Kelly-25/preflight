@@ -56,6 +56,37 @@ type Condition struct {
 	AttributeChanged []string `yaml:"attribute_changed,omitempty"`
 }
 
+// Reference is an action required against another resource's ARN.
+type Reference struct {
+	Action string `yaml:"action"`
+	// ARNFrom names the attribute holding the referenced resource. Its value is
+	// used as the ARN directly unless ARNFormat is given.
+	ARNFrom string `yaml:"arn_from"`
+	// ARNFormat builds an ARN when the attribute holds a bare name rather than
+	// an ARN — aws_iam_instance_profile.role is a role *name*, while
+	// aws_lambda_function.role is already an ARN. ${Name} is the attribute's
+	// value; ${Partition}, ${Account} and ${Region} come from the caller.
+	ARNFormat string `yaml:"arn_format,omitempty"`
+	// Operations limits which operations need this. Empty means all of them.
+	// Deleting an instance profile removes the role rather than passing it, so
+	// scoping matters.
+	Operations []Operation `yaml:"operations,omitempty"`
+	When       *Condition  `yaml:"when,omitempty"`
+}
+
+// AppliesTo reports whether this reference is required for an operation.
+func (ref Reference) AppliesTo(op Operation) bool {
+	if len(ref.Operations) == 0 {
+		return true
+	}
+	for _, o := range ref.Operations {
+		if o == op {
+			return true
+		}
+	}
+	return false
+}
+
 // UnmarshalYAML accepts the flat string form as sugar for {action: X}.
 func (a *Action) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind == yaml.ScalarNode {
@@ -143,6 +174,16 @@ type Resource struct {
 	// pattern supported — anything richer stops contributors being able to
 	// check an entry by eye.
 	ContextKeys map[string]ContextKeySource `yaml:"context_keys,omitempty"`
+
+	// References are actions this resource needs on a DIFFERENT resource that it
+	// points at. iam:PassRole is the motivating case and the most commonly
+	// missed permission in real Terraform deploys: handing a role to a service
+	// is authorised against the *role's* ARN, so the permission belongs to
+	// whichever resource does the handing, not to the role.
+	//
+	// A per-resource, single-ARN schema cannot express that at all, which is why
+	// every entry that needs it previously carried a note apologising instead.
+	References []Reference `yaml:"references,omitempty"`
 
 	Status Status `yaml:"status"`
 
@@ -233,6 +274,21 @@ func (r Resource) validate() error {
 	}
 	if r.Status == StatusVerified && len(r.VerifiedOperations) > 0 {
 		return fmt.Errorf("%s: `verified_operations` is redundant with status %q, which already covers every operation", r.Type, StatusVerified)
+	}
+	for _, ref := range r.References {
+		if !strings.Contains(ref.Action, ":") {
+			return fmt.Errorf("%s: reference action %q is not of the form service:Action", r.Type, ref.Action)
+		}
+		if ref.ARNFrom == "" {
+			return fmt.Errorf("%s: reference %q has no `arn_from`; without it there is no resource to check against", r.Type, ref.Action)
+		}
+		for _, op := range ref.Operations {
+			switch op {
+			case OpCreate, OpUpdate, OpDelete:
+			default:
+				return fmt.Errorf("%s: reference %q lists unknown operation %q", r.Type, ref.Action, op)
+			}
+		}
 	}
 	for _, op := range r.VerifiedOperations {
 		switch op {
