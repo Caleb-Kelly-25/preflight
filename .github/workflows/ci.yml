@@ -71,6 +71,27 @@ jobs:
       - run: go build -tags awsintegration ./...
       - run: go vet -tags awsintegration ./...
 
+  # The derivation harness is excluded from every normal build and creates real
+  # AWS resources when run, so CI only ever compiles it.
+  derive-build:
+    name: derive harness compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build -tags awsderive ./...
+      - run: go vet -tags awsderive ./...
+      # The harness must never be reachable from the binary users run in CI.
+      - name: cmd/preflight does not import internal/derive
+        run: |
+          if go list -deps ./cmd/preflight | grep -q 'internal/derive'; then
+            echo "cmd/preflight imports internal/derive; the harness must stay out of the shipped binary"
+            exit 1
+          fi
+
   vet:
     name: vet and format
     runs-on: ubuntu-latest
