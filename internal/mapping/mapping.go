@@ -132,6 +132,11 @@ type Resource struct {
 	// that supplies it. A variable with no entry here cannot be filled from the
 	// plan, which forces a wildcard ARN and a downgraded confidence level.
 	ARNAttributes map[string]string `yaml:"arn_attributes,omitempty"`
+
+	// ARNPrefixAttributes maps an ARN variable to a name_prefix attribute, used
+	// when the real name is generated at apply time. See BuildARN for why a
+	// representative name beats "*" here.
+	ARNPrefixAttributes map[string]string `yaml:"arn_prefix_attributes,omitempty"`
 	// Operations lists the IAM actions each lifecycle operation requires.
 	Operations map[Operation][]Action `yaml:"operations"`
 
@@ -274,6 +279,19 @@ func (r Resource) validate() error {
 	}
 	if r.Status == StatusVerified && len(r.VerifiedOperations) > 0 {
 		return fmt.Errorf("%s: `verified_operations` is redundant with status %q, which already covers every operation", r.Type, StatusVerified)
+	}
+	// A prefix attribute keyed to a variable the ARN template does not use is a
+	// typo that would silently never apply, leaving the ARN at "*" forever.
+	if len(r.ARNPrefixAttributes) > 0 {
+		vars := make(map[string]bool)
+		for _, v := range r.ARNVars() {
+			vars[v] = true
+		}
+		for v := range r.ARNPrefixAttributes {
+			if !vars[v] {
+				return fmt.Errorf("%s: arn_prefix_attributes names ${%s}, which arn_format does not use", r.Type, v)
+			}
+		}
 	}
 	for _, ref := range r.References {
 		if !strings.Contains(ref.Action, ":") {

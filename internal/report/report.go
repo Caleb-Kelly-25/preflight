@@ -248,7 +248,11 @@ func reasonText(r finding.Reason) string {
 	case finding.ReasonRCPNotEvaluated:
 		return "RCPs not evaluated"
 	case finding.ReasonARNUnresolved:
-		return "ARN unknown until apply, checked against *"
+		// The scope actually used is printed per finding under --explain: it is
+		// "*" when nothing was derivable, or a representative name when the
+		// entry supplied a name_prefix. Naming "*" here would now be wrong for
+		// the second case.
+		return "exact ARN unknown until apply, so denials are inconclusive"
 	case finding.ReasonConditionKeysUnknown:
 		return "policy conditions not evaluated"
 	case finding.ReasonMappingUnverified:

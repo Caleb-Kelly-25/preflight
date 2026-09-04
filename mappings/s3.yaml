@@ -27,6 +27,8 @@ resources:
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes:
       BucketName: bucket
+    arn_prefix_attributes:
+      BucketName: bucket_prefix
     resource_policy_capable: [update, delete]
     context_keys:
       # Deploy roles are commonly gated on tags at creation time. Sourcing the

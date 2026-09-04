@@ -106,6 +106,9 @@ func (r Resource) BuildARN(ctx ARNContext, after, afterUnknown map[string]any) (
 	}
 
 	resolved := true
+	// approximate marks an ARN built from a name_prefix rather than a real
+	// name. The string is usable, but it is not the resource's actual ARN.
+	approximate := false
 	out := varPattern.ReplaceAllStringFunc(r.ARNFormat, func(match string) string {
 		name := varPattern.FindStringSubmatch(match)[1]
 
@@ -130,32 +133,47 @@ func (r Resource) BuildARN(ctx ARNContext, after, afterUnknown map[string]any) (
 			return ctx.Region
 		}
 
-		attr, ok := r.ARNAttributes[name]
-		if !ok {
-			resolved = false
-			return match
+		if s, ok := stringAttr(after, afterUnknown, r.ARNAttributes[name]); ok {
+			return s
 		}
-		if isUnknown(afterUnknown, attr) {
-			resolved = false
-			return match
+
+		// Fall back to a name_prefix attribute. Terraform generates the real
+		// name at apply time, so it is genuinely unknowable here — but a
+		// representative name sharing the prefix is still far more useful than
+		// "*", because policies are commonly scoped with a trailing wildcard
+		// ("role/myapp-*"). A concrete name matches that; "*" does not, as E1
+		// measured. The result is never exact, so an allow can only reach
+		// Likely and a denial stays inconclusive.
+		if s, ok := stringAttr(after, afterUnknown, r.ARNPrefixAttributes[name]); ok {
+			approximate = true
+			return s + prefixPlaceholder
 		}
-		v, ok := after[attr]
-		if !ok || v == nil {
-			resolved = false
-			return match
-		}
-		s, ok := v.(string)
-		if !ok || s == "" {
-			resolved = false
-			return match
-		}
-		return s
+
+		resolved = false
+		return match
 	})
 
 	if !resolved {
 		return "*", false
 	}
-	return out, true
+	return out, !approximate
+}
+
+// prefixPlaceholder stands in for the suffix Terraform appends to a name_prefix.
+// Twenty-six characters, matching the length Terraform actually generates, so
+// the synthetic name cannot exceed a length limit the real one would respect.
+const prefixPlaceholder = "00000000000000000000000000"
+
+// stringAttr reads a non-empty string attribute that Terraform already knows.
+func stringAttr(after, afterUnknown map[string]any, attr string) (string, bool) {
+	if attr == "" || isUnknown(afterUnknown, attr) {
+		return "", false
+	}
+	s, ok := after[attr].(string)
+	if !ok || s == "" {
+		return "", false
+	}
+	return s, true
 }
 
 // isUnknown reports whether Terraform marked an attribute as unknown until

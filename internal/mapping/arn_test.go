@@ -67,6 +67,59 @@ func TestBuildARN(t *testing.T) {
 	})
 }
 
+// TestBuildARNFromPrefix covers name_prefix resources, where the real name is
+// generated at apply time.
+//
+// The point is not to guess the name — that is impossible — but to beat "*".
+// M1 measured that ResourceArns is a literal rather than a pattern, so passing
+// "myapp-*" would match nothing. A concrete representative name does match a
+// policy scoped as "role/myapp-*", which is how such policies are actually
+// written, turning an Unchecked into a Likely.
+func TestBuildARNFromPrefix(t *testing.T) {
+	role := Resource{
+		Type:                "aws_iam_role",
+		Service:             "iam",
+		ARNFormat:           "arn:${Partition}:iam::${Account}:role/${RoleName}",
+		ARNAttributes:       map[string]string{"RoleName": "name"},
+		ARNPrefixAttributes: map[string]string{"RoleName": "name_prefix"},
+	}
+	ctx := ARNContext{Partition: "aws", Account: "123456789012", Region: "us-east-1"}
+
+	t.Run("a real name still wins over the prefix", func(t *testing.T) {
+		got, exact := role.BuildARN(ctx,
+			map[string]any{"name": "deploy", "name_prefix": "deploy-"}, nil)
+		if !exact {
+			t.Error("exact = false, want true: the name is known")
+		}
+		if want := "arn:aws:iam::123456789012:role/deploy"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("prefix produces a representative arn, never exact", func(t *testing.T) {
+		got, exact := role.BuildARN(ctx,
+			map[string]any{"name": nil, "name_prefix": "myapp-"},
+			map[string]any{"name": true})
+		if exact {
+			t.Error("exact = true, but the real name is generated at apply time")
+		}
+		if got == "*" {
+			t.Fatal("fell back to wildcard despite a usable name_prefix")
+		}
+		want := "arn:aws:iam::123456789012:role/myapp-" + prefixPlaceholder
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("no name and no prefix is still a wildcard", func(t *testing.T) {
+		got, exact := role.BuildARN(ctx, map[string]any{}, nil)
+		if exact || got != "*" {
+			t.Errorf("got (%q, %v), want (%q, false)", got, exact, "*")
+		}
+	})
+}
+
 func TestARNVars(t *testing.T) {
 	r := Resource{ARNFormat: "arn:${Partition}:iam::${Account}:role/${RoleName}"}
 	got := r.ARNVars()

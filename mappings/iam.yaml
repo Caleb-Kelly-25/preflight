@@ -35,6 +35,9 @@ resources:
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
     arn_attributes:
       RoleName: name
+    # Terraform generates the name at apply time when name_prefix is used.
+    arn_prefix_attributes:
+      RoleName: name_prefix
     context_keys:
       "aws:RequestTag/*":
         from: tags
@@ -112,6 +115,8 @@ resources:
     arn_format: "arn:${Partition}:iam::${Account}:policy/${PolicyName}"
     arn_attributes:
       PolicyName: name
+    arn_prefix_attributes:
+      PolicyName: name_prefix
     operations:
       create:
         - iam:CreatePolicy
