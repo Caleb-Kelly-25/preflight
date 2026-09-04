@@ -1,0 +1,147 @@
+# Amazon EC2 / VPC networking
+#
+# VERIFICATION STATUS — see the per-entry status fields.
+#
+# Two dimensions must hold before an entry is `verified`; see README.md.
+#   1. Names and ARNs   - checked via accessanalyzer:ValidatePolicy.
+#   2. Completeness     - proven only by granting a role exactly the mapped
+#                         actions and running a real terraform apply.
+#
+# A note specific to this service. Most ec2:Describe* actions do NOT support
+# resource-level permissions: a policy must grant them on "*". That is fine for
+# simulation, because a policy granting "*" matches any ARN we scope to — but it
+# means a denial on a Describe action almost always indicates a genuinely absent
+# grant rather than a scoping mismatch.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html
+
+resources:
+  - type: aws_vpc
+    service: ec2
+    status: draft
+    # Create and delete were derived empirically against provider v6.x on
+    # 2026-09-02; update was not. See notes.
+    verified_operations: [create, delete]
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html
+    arn_format: "arn:${Partition}:ec2:${Region}:${Account}:vpc/${VpcId}"
+    arn_attributes:
+      VpcId: id
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+    # Both measured load-bearing: removing either fails the apply.
+    # ec2:DescribeTags was in the first draft of this entry and is NOT needed —
+    # removing it changes nothing, so it was over-reporting.
+    read_actions:
+      - ec2:DescribeVpcs
+      - ec2:DescribeVpcAttribute
+    operations:
+      create:
+        - ec2:CreateVpc
+        # Measured load-bearing. Note this differs mechanically from IAM:
+        # CreateVpc accepts TagSpecifications so no separate tagging call is
+        # made, yet ec2:CreateTags is still required to authorise it.
+        - action: ec2:CreateTags
+          when: { attribute_set: tags }
+        # Measured load-bearing for a VPC whose DNS attributes differ from the
+        # defaults. Left unconditional rather than gated on the dns attributes:
+        # gating is the edit that can under-report, and this was only measured
+        # with them set.
+        - ec2:ModifyVpcAttribute
+      update:
+        - ec2:ModifyVpcAttribute
+        - action: ec2:CreateTags
+          when: { attribute_changed: [tags] }
+        - action: ec2:DeleteTags
+          when: { attribute_changed: [tags] }
+      delete:
+        - ec2:DeleteVpc
+    notes: >-
+      DERIVED EMPIRICALLY 2026-09-02. A role holding exactly ec2:CreateVpc,
+      ec2:CreateTags, ec2:ModifyVpcAttribute, ec2:DescribeVpcs and
+      ec2:DescribeVpcAttribute applies a tagged VPC with non-default DNS
+      attributes; adding ec2:DeleteVpc destroys it. Every one of those was
+      confirmed load-bearing by removing it and watching the apply fail.
+
+      Update is NOT verified: it was never exercised, and its actions are
+      inferred rather than measured.
+
+      The id attribute is unknown until apply, so a create is simulated against
+      "*" and any denial is inconclusive. That is inherent to VPCs rather than a
+      gap in this entry: the identifier is assigned by AWS.
+
+      ec2:CreateTags is gated on tags being set, which was measured only in the
+      tagged direction — an untagged VPC was not tested.
+
+  - type: aws_subnet
+    service: ec2
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html
+    arn_format: "arn:${Partition}:ec2:${Region}:${Account}:subnet/${SubnetId}"
+    arn_attributes:
+      SubnetId: id
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+    read_actions:
+      - ec2:DescribeSubnets
+      - ec2:DescribeTags
+    operations:
+      create:
+        - ec2:CreateSubnet
+        - action: ec2:CreateTags
+          when: { attribute_set: tags }
+        - action: ec2:ModifySubnetAttribute
+          when: { attribute_set: map_public_ip_on_launch }
+      update:
+        - ec2:ModifySubnetAttribute
+        - action: ec2:CreateTags
+          when: { attribute_changed: [tags] }
+        - action: ec2:DeleteTags
+          when: { attribute_changed: [tags] }
+      delete:
+        - ec2:DeleteSubnet
+
+  - type: aws_security_group
+    service: ec2
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html
+    arn_format: "arn:${Partition}:ec2:${Region}:${Account}:security-group/${GroupId}"
+    arn_attributes:
+      GroupId: id
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+    read_actions:
+      - ec2:DescribeSecurityGroups
+      - ec2:DescribeSecurityGroupRules
+      - ec2:DescribeTags
+    operations:
+      create:
+        - ec2:CreateSecurityGroup
+        - action: ec2:CreateTags
+          when: { attribute_set: tags }
+        # A security group is created empty; inline rules are separate calls.
+        - action: ec2:AuthorizeSecurityGroupIngress
+          when: { attribute_set: ingress }
+        - action: ec2:AuthorizeSecurityGroupEgress
+          when: { attribute_set: egress }
+        # Terraform revokes the default allow-all egress rule when the
+        # configuration specifies its own, which is a separate authorisation.
+        - action: ec2:RevokeSecurityGroupEgress
+          when: { attribute_set: egress }
+      update:
+        - action: ec2:AuthorizeSecurityGroupIngress
+          when: { attribute_changed: [ingress] }
+        - action: ec2:RevokeSecurityGroupIngress
+          when: { attribute_changed: [ingress] }
+        - action: ec2:AuthorizeSecurityGroupEgress
+          when: { attribute_changed: [egress] }
+        - action: ec2:RevokeSecurityGroupEgress
+          when: { attribute_changed: [egress] }
+        - action: ec2:CreateTags
+          when: { attribute_changed: [tags] }
+        - action: ec2:DeleteTags
+          when: { attribute_changed: [tags] }
+      delete:
+        - ec2:DeleteSecurityGroup
