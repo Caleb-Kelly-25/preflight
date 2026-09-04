@@ -5,8 +5,10 @@ package derive
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -71,12 +73,44 @@ func (t *TerraformApplier) Destroy(ctx context.Context) error {
 	if budget <= 0 {
 		budget = 10 * time.Minute
 	}
-	_, timedOut, err := t.run(ctx, budget, t.operatorEnv(), "destroy", "-auto-approve", "-input=false", "-no-color")
+	out, timedOut, err := t.run(ctx, budget, t.operatorEnv(), "destroy", "-auto-approve", "-input=false", "-no-color")
+	if err == nil && !timedOut {
+		return nil
+	}
+
+	// A stalled apply is killed mid-flight, which can leave the state lock held
+	// by a provider process that is now gone. The next destroy then fails for a
+	// reason that has nothing to do with AWS. Break the lock and retry once —
+	// safe here because the harness owns this working directory exclusively.
+	if id := lockID(out); id != "" {
+		if _, _, unlockErr := t.run(ctx, time.Minute, t.operatorEnv(),
+			"force-unlock", "-force", id); unlockErr != nil {
+			return fmt.Errorf("destroy blocked by state lock %s and force-unlock failed: %w", id, unlockErr)
+		}
+		out, timedOut, err = t.run(ctx, budget, t.operatorEnv(),
+			"destroy", "-auto-approve", "-input=false", "-no-color")
+		if err == nil && !timedOut {
+			return nil
+		}
+	}
+
 	if timedOut {
 		return errors.New("terraform destroy timed out")
 	}
-	return err
+	return fmt.Errorf("terraform destroy failed: %w: %s", err, tail(out))
 }
+
+// lockID pulls the lock identifier out of Terraform's own error text, which is
+// the only place it is reported.
+func lockID(out string) string {
+	m := lockIDPattern.FindStringSubmatch(out)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
+var lockIDPattern = regexp.MustCompile(`(?i)Lock Info:[\s\S]*?ID:\s+([0-9a-fA-F-]{8,})`)
 
 // Init prepares the working directory. Operator credentials; no resources are
 // created.

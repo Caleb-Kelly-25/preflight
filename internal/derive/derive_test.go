@@ -39,6 +39,10 @@ type fakeApplier struct {
 	// opaque suppresses action names in denials, modelling EC2.
 	opaque bool
 
+	// destroyFailsAfter makes Destroy start failing at the Nth call, modelling
+	// a stalled apply that leaves the state lock held.
+	destroyFailsAfter int
+
 	applies  int
 	destroys int
 }
@@ -75,7 +79,13 @@ func (a *fakeApplier) Apply(context.Context, time.Duration) derive.Outcome {
 	}
 }
 
-func (a *fakeApplier) Destroy(context.Context) error { a.destroys++; return nil }
+func (a *fakeApplier) Destroy(context.Context) error {
+	a.destroys++
+	if a.destroyFailsAfter > 0 && a.destroys >= a.destroyFailsAfter {
+		return fmt.Errorf("simulated destroy failure")
+	}
+	return nil
+}
 
 func newFixture(required []string, seed []string) (*derive.Deriver, *fakeGrantor, *fakeApplier) {
 	g := &fakeGrantor{failOn: -1}
@@ -233,6 +243,37 @@ func TestOpaqueDenialStopsRatherThanGuessing(t *testing.T) {
 	}
 	if len(res.Warnings) == 0 || !strings.Contains(strings.Join(res.Warnings, " "), "DecodeAuthorizationMessage") {
 		t.Errorf("warnings do not explain the opaque denial: %v", res.Warnings)
+	}
+}
+
+// TestFailedTeardownAbortsTheRun covers the bug the first live run exposed.
+//
+// A destroy that fails leaves infrastructure behind, and the next attempt then
+// measures against it. An apply that "succeeds" only because the resource
+// already exists reads as "that action was not needed" — which writes an action
+// set missing something real. Stopping is the only safe response.
+func TestFailedTeardownAbortsTheRun(t *testing.T) {
+	truth := []string{"ec2:CreateVpc", "ec2:DescribeVpcs", "ec2:ModifyVpcAttribute"}
+	g := &fakeGrantor{failOn: -1}
+	a := &fakeApplier{grantor: g, required: truth, destroyFailsAfter: 2}
+	d := &derive.Deriver{Grantor: g, Applier: a, MaxAttempts: 20, AttemptBudget: time.Second}
+
+	res, err := d.Derive(context.Background(), truth)
+	if err == nil {
+		t.Fatal("Derive returned no error despite a failed teardown")
+	}
+	if !res.Dirty {
+		t.Error("Result.Dirty is false after a teardown failure")
+	}
+	// It must stop, not carry on through the remaining removals.
+	if a.applies > 3 {
+		t.Errorf("kept going after teardown failed: %d applies", a.applies)
+	}
+	if res.Minimal == derive.ConfidenceProven {
+		t.Error("minimality claimed proven on a dirty run")
+	}
+	if len(res.Warnings) == 0 {
+		t.Error("no warning explains why the run stopped")
 	}
 }
 

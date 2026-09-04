@@ -115,11 +115,16 @@ func run(args []string, stdout, stderr *os.File) error {
 		AttemptBudget: *budget,
 		Log:           stdout,
 	}
-	res, err := d.Derive(ctx, seed)
-	if err != nil {
-		return err
-	}
+	res, derr := d.Derive(ctx, seed)
+	// Report first: a run that aborted still established something, and the
+	// warnings explain why it stopped.
 	report(stdout, *resourceType, *operation, res)
+	if derr != nil {
+		return derr
+	}
+	if res.Dirty {
+		return fmt.Errorf("teardown failed during the run; check for surviving resources")
+	}
 	return nil
 }
 

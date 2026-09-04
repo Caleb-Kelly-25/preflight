@@ -17,6 +17,11 @@ coverage.*
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
+# ...except for derivation fixtures. A derived action set is only valid for the
+# provider version that produced it, and the lock file is what pins that. Without
+# it committed, re-running a derivation silently uses whatever provider is
+# current, and a behaviour change would be recorded against a version nobody ran.
+!derivefixtures/**/.terraform.lock.hcl
 crash.log
 crash.*.log
 

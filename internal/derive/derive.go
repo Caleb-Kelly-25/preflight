@@ -2,6 +2,7 @@ package derive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -57,6 +58,10 @@ type Result struct {
 
 	Attempts []Attempt
 	Warnings []string
+
+	// Dirty records that a teardown failed, so AWS may still hold resources
+	// from this run and nothing measured afterwards can be trusted.
+	Dirty bool
 }
 
 // Derive grows the seed set until an apply succeeds, then removes actions one
@@ -84,7 +89,11 @@ func (d *Deriver) Derive(ctx context.Context, seed []string) (Result, error) {
 	// the proof.
 	grown := false
 	for i := 0; i < maxAttempts; i++ {
-		out := d.attempt(ctx, &res, current, budget)
+		out, err := d.attempt(ctx, &res, current, budget)
+		if err != nil {
+			res.Sufficiency = ConfidenceInconclusive
+			return res, err
+		}
 		switch out.Kind {
 		case OutcomeSuccess:
 			grown = true
@@ -136,7 +145,20 @@ func (d *Deriver) Derive(ctx context.Context, seed []string) (Result, error) {
 		if len(trial) == len(current) {
 			continue
 		}
-		out := d.attempt(ctx, &res, trial, budget)
+		out, err := d.attempt(ctx, &res, trial, budget)
+		if err != nil {
+			// The apply itself ran in a clean environment — the previous
+			// teardown succeeded, or we would already have stopped. So this
+			// measurement is sound and worth keeping; it is the NEXT one that
+			// would be unreliable. Record it, then stop.
+			if out.Kind == OutcomeDenied || out.Kind == OutcomeStalled {
+				res.Evidence[action] = Evidence{
+					Action: action, Kind: out.Kind, Detail: out.Detail, Attempt: len(res.Attempts) - 1,
+				}
+			}
+			res.Minimal = ConfidenceInconclusive
+			return res, err
+		}
 
 		if out.Kind == OutcomeSuccess {
 			// Asymmetric on purpose. Reading a transient failure as
@@ -144,7 +166,11 @@ func (d *Deriver) Derive(ctx context.Context, seed []string) (Result, error) {
 			// one as "droppable" writes a verified mapping that is MISSING an
 			// action — the one unforgivable failure. So dropping needs two
 			// successes; keeping needs one failure.
-			confirm := d.attempt(ctx, &res, trial, budget)
+			confirm, err := d.attempt(ctx, &res, trial, budget)
+			if err != nil {
+				res.Minimal = ConfidenceInconclusive
+				return res, err
+			}
 			if confirm.Kind == OutcomeSuccess {
 				current = trial
 				continue
@@ -175,27 +201,40 @@ func (d *Deriver) Derive(ctx context.Context, seed []string) (Result, error) {
 	return res, nil
 }
 
+// errDirty means teardown failed, so the environment no longer matches what the
+// next attempt would assume.
+var errDirty = errors.New("teardown failed; the environment is dirty and further results would be unreliable")
+
 // attempt grants a set, applies, and always tears down.
-func (d *Deriver) attempt(ctx context.Context, res *Result, actions []string, budget time.Duration) Outcome {
+//
+// A failed teardown aborts the run. Continuing would measure the next attempt
+// against leftover infrastructure, and an apply that "succeeds" only because the
+// resource already exists is precisely how a derivation produces an action set
+// that is missing something.
+func (d *Deriver) attempt(ctx context.Context, res *Result, actions []string, budget time.Duration) (Outcome, error) {
 	idx := len(res.Attempts)
 	if err := d.Grantor.Grant(ctx, actions); err != nil {
 		out := Outcome{Kind: OutcomeFailed, Detail: fmt.Sprintf("granting: %v", err)}
 		res.Attempts = append(res.Attempts, Attempt{Index: idx, Granted: actions, Outcome: out})
-		return out
+		return out, nil
 	}
 
 	out := d.Applier.Apply(ctx, budget)
 
-	// Teardown runs on every path, including the ones that failed, and its own
-	// failure is recorded rather than swallowed: a leaked resource makes the
-	// next attempt lie.
-	if err := d.Applier.Destroy(ctx); err != nil {
-		res.Warnings = append(res.Warnings, fmt.Sprintf("attempt %d: destroy failed: %v", idx, err))
-	}
+	// Teardown runs on every path, including the ones that failed.
+	destroyErr := d.Applier.Destroy(ctx)
 
 	res.Attempts = append(res.Attempts, Attempt{Index: idx, Granted: actions, Outcome: out})
 	d.logf("attempt %d: %d actions -> %s", idx, len(actions), out.Kind)
-	return out
+
+	if destroyErr != nil {
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"attempt %d: destroy failed (%v); stopping rather than measuring against leftover resources",
+			idx, destroyErr))
+		res.Dirty = true
+		return out, errDirty
+	}
+	return out, nil
 }
 
 func (d *Deriver) logf(format string, args ...any) {

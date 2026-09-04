@@ -19,8 +19,9 @@ resources:
   - type: aws_vpc
     service: ec2
     status: draft
-    # Create and delete were derived empirically against provider v6.x on
-    # 2026-09-02; update was not. See notes.
+    # Create and delete were derived empirically against provider 6.63.0 on
+    # 2026-09-02, and create was independently reproduced by the derivation
+    # harness on 2026-09-04; update was not. See notes.
     verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html
     arn_format: "arn:${Partition}:ec2:${Region}:${Account}:vpc/${VpcId}"
@@ -57,11 +58,19 @@ resources:
       delete:
         - ec2:DeleteVpc
     notes: >-
-      DERIVED EMPIRICALLY 2026-09-02. A role holding exactly ec2:CreateVpc,
-      ec2:CreateTags, ec2:ModifyVpcAttribute, ec2:DescribeVpcs and
-      ec2:DescribeVpcAttribute applies a tagged VPC with non-default DNS
-      attributes; adding ec2:DeleteVpc destroys it. Every one of those was
-      confirmed load-bearing by removing it and watching the apply fail.
+      DERIVED EMPIRICALLY 2026-09-02 against AWS provider 6.63.0, and
+      independently reproduced by the derivation harness on 2026-09-04:
+      sufficiency proven, minimality proven, zero surplus, zero missing.
+
+      A role holding exactly ec2:CreateVpc, ec2:CreateTags,
+      ec2:ModifyVpcAttribute, ec2:DescribeVpcs and ec2:DescribeVpcAttribute
+      applies a tagged VPC with non-default DNS attributes; adding ec2:DeleteVpc
+      destroys it. Every one was confirmed load-bearing by removing it and
+      watching the apply fail with a named denial.
+
+      The fixture is derivefixtures/aws_vpc, whose committed lock file pins the
+      provider version this result is valid for. A future run against a
+      different provider may legitimately disagree.
 
       Update is NOT verified: it was never exercised, and its actions are
       inferred rather than measured.
