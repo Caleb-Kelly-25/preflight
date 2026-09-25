@@ -1,0 +1,217 @@
+# Amazon CloudWatch Logs
+#
+# VERIFICATION STATUS — every entry in this file is `draft`. Nothing here has
+# been near a real apply.
+#
+# Two dimensions must hold before an entry is `verified`; see README.md.
+#   1. Names            - action NAMES checked 2026-09-25 via
+#                         accessanalyzer:ValidatePolicy. All 13 logs actions used
+#                         below exist and are spelled correctly. Zero ERROR
+#                         findings.
+#   2. Completeness     - NOT established. No apply has been run against these.
+#
+# ARNs. ValidatePolicy checks names only — measured 2026-09-25, it accepts
+# lambda:CreateFunction scoped to an S3 bucket ARN without complaint. So the
+# arn_formats below were instead checked against the "Resource types" column of
+# the action table in the CloudWatch Logs page of the Service Authorization
+# Reference. That reading is what put aws_cloudwatch_log_stream's arn_format on
+# the log-GROUP path rather than inventing a separate stream resource; see that
+# entry's notes. It is a reading of a documentation table, not a measurement.
+#
+# RCP STATUS, AND WHY IT DOMINATES EVERYTHING ELSE HERE: `logs` IS in
+# internal/mapping's rcpServices. SimulatePrincipalPolicy does not evaluate
+# resource control policies, so no finding for any resource in this file can
+# reach Verified — on any operation, including create, because an RCP is
+# attached to the account or OU and therefore exists before the log group does.
+# Promoting these entries to `verified` would not change a single reported
+# confidence level. The value of getting the action lists right here is that a
+# denial is real and a `Likely` allowed is honest, not that the ceiling moves.
+#
+# RESOURCE POLICIES, and what was concluded. CloudWatch Logs does have a
+# resource-policy API (logs:PutResourcePolicy), so the obvious move is to set
+# resource_policy_capable on both entries. It is deliberately NOT set, for a
+# reason specific to this service: a CloudWatch Logs resource policy is an
+# ACCOUNT-LEVEL object, not something attached to an individual log group, and
+# it exists to GRANT other AWS services (EventBridge, Route 53, Elasticsearch,
+# MSK) the ability to deliver logs into a group. It does not govern whether the
+# deploying identity may create, tag, retain or delete a log group; those are
+# authorized by the identity policy, SCPs and RCPs alone, all of which the
+# simulator handles or is already capped by.
+#
+# Under-claiming resource_policy_capable is normally a correctness bug rather
+# than conservatism. Here it is not observable: the RCP cap above already holds
+# every finding in this file at Likely, so claiming it would change no output.
+# That is the honest reason it was safe to make this call on reasoning alone —
+# and if the reasoning is wrong, nothing downstream is wrong because of it.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazoncloudwatchlogs.html
+
+resources:
+  - type: aws_cloudwatch_log_group
+    service: logs
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazoncloudwatchlogs.html
+    # `name` is known at plan time, so a create resolves to a real ARN instead of
+    # degrading to "*" — unusual and worth having. See notes for the trailing
+    # ":*" problem, which is the known defect in this arn_format.
+    arn_format: "arn:${Partition}:logs:${Region}:${Account}:log-group:${LogGroupName}"
+    arn_attributes:
+      LogGroupName: name
+    arn_prefix_attributes:
+      LogGroupName: name_prefix
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    # logs:ListTagsForResource IS included here, and that is a deliberate
+    # departure from the aws_vpc / aws_security_group finding that a separate
+    # tag-read action was surplus both times. The reason those were surplus is
+    # that an ec2 Describe response carries the resource's tags inline, so no
+    # second call is made. DescribeLogGroups does NOT return tags — the
+    # logGroups it returns have no tag field at all — so a provider that manages
+    # tags on this resource has no way to read them back except a separate call.
+    # This is reasoning from the shape of the API response, not a hunch, but it
+    # is still not a measurement.
+    read_actions:
+      - logs:DescribeLogGroups
+      - logs:ListTagsForResource
+
+    operations:
+      create:
+        - logs:CreateLogGroup
+        # CreateLogGroup accepts a tags parameter, so this is the tag-on-create
+        # shape rather than a second API call — the same as iam:TagRole on
+        # CreateRole, which was MEASURED to be required with no TagRole call ever
+        # appearing. REASONED here, not measured.
+        - action: logs:TagResource
+          when: { attribute_set: tags }
+        # A genuine second call: retention is not a CreateLogGroup parameter.
+        - action: logs:PutRetentionPolicy
+          when: { attribute_set: retention_in_days }
+        # CreateLogGroup takes kmsKeyId inline, so no AssociateKmsKey call is
+        # expected — but by the CreateRole/TagRole precedent the action may be
+        # authorized anyway. Included on the over-reporting side for that reason.
+        - action: logs:AssociateKmsKey
+          when: { attribute_set: kms_key_id }
+      update:
+        - action: logs:PutRetentionPolicy
+          when: { attribute_changed: [retention_in_days] }
+        # Setting retention back to "never expire" is a delete, not a put.
+        - action: logs:DeleteRetentionPolicy
+          when: { attribute_changed: [retention_in_days] }
+        - action: logs:TagResource
+          when: { attribute_changed: [tags] }
+        - action: logs:UntagResource
+          when: { attribute_changed: [tags] }
+        - action: logs:AssociateKmsKey
+          when: { attribute_changed: [kms_key_id] }
+        - action: logs:DisassociateKmsKey
+          when: { attribute_changed: [kms_key_id] }
+      delete:
+        - logs:DeleteLogGroup
+
+    notes: >-
+      DRAFT. Names checked with accessanalyzer:ValidatePolicy on 2026-09-25 and
+      all exist. Completeness is unestablished — no apply has been run.
+
+      THE KNOWN DEFECT IN THIS ENTRY IS THE ARN, and it is the same class of
+      problem as aws_lambda_layer_version. Real-world policies for CloudWatch
+      Logs are almost always written with a trailing stream wildcard:
+
+        "Resource": "arn:aws:logs:us-east-1:111122223333:log-group:/app/api:*"
+
+      This entry simulates against the bare group ARN, with no ":*". Because
+      ResourceArns is matched as a literal against the policy's patterns, the
+      wildcard spelling above does NOT match what this entry asks about, so a
+      policy that really does allow the call can be reported as a denial. That is
+      a false positive — the safe direction, and visible — and it was chosen
+      because the alternative is worse: appending ":*" ourselves would make the
+      queried ARN BROADER than the resource AWS authorizes against, and a broad
+      match against a narrow grant is how an entry comes to report "allowed" for
+      a call that will fail. Expect noisy red on log groups until the schema can
+      express per-action ARN shapes.
+
+      NO kms: REFERENCE, on purpose, and this differs from aws_db_instance.
+      CloudWatch Logs encryption is a key-policy integration: the KMS key's own
+      policy must allow logs.amazonaws.com via the kms:EncryptionContext
+      condition, and the service does not establish a grant on the caller's
+      behalf the way RDS does. So the deploying identity is believed to need no
+      kms: action of its own for kms_key_id — only logs:AssociateKmsKey. Believed
+      from the documented integration shape, not measured. If CloudWatch Logs
+      does call CreateGrant with the caller's credentials, this under-reports for
+      every encrypted log group.
+
+      THE RETENTION GATE DOES LESS THAN IT LOOKS LIKE IT DOES, in the safe
+      direction. retention_in_days arrives as a number and isSet() treats any
+      non-nil number as set, so logs:PutRetentionPolicy will be requested even
+      for a group configured to retain forever. Over-reporting, not
+      under-reporting.
+
+      LEGACY ACTION NAMES. logs:TagLogGroup, logs:UntagLogGroup and
+      logs:ListTagsLogGroup all still validate as real action names — they were
+      checked on 2026-09-25 — and they are the deprecated per-log-group tagging
+      actions that the TagResource/UntagResource/ListTagsForResource trio
+      replaced. This entry maps only the modern names. Two ways that is wrong: an
+      older provider version that still calls the legacy APIs would under-report,
+      and a deploy role whose policy was written years ago may grant only the
+      legacy names, which this entry would then report as a denial. Neither has
+      been checked against a provider version.
+
+      skip_destroy is not modelled: a group left in place on destroy makes no API
+      call, so delete over-reports for it.
+
+  - type: aws_cloudwatch_log_stream
+    service: logs
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazoncloudwatchlogs.html
+    # This ARN is the considered part of the entry. The Resource types column
+    # gives CreateLogStream, DeleteLogStream and DescribeLogStreams the log-GROUP
+    # resource type, not a stream type — but the stream ARN is still the better
+    # thing to simulate against, because it is the NARROWER of the two.
+    #
+    #   - Against the full stream ARN, the ubiquitous policy spelling
+    #     "log-group:/app/api:*" matches, and so does "log-group:/app/api:log-
+    #     stream:*". A policy written as the bare group ARN does not, which
+    #     reports a denial that would not happen — a false positive, visible.
+    #   - Against the bare group ARN we would instead be asking about something
+    #     BROADER than the stream the call really touches, and a grant that
+    #     matched it while the real call was denied is a false "allowed".
+    #
+    # Under-reporting is the unforgivable direction, so the narrow ARN wins.
+    arn_format: "arn:${Partition}:logs:${Region}:${Account}:log-group:${LogGroupName}:log-stream:${LogStreamName}"
+    arn_attributes:
+      LogGroupName: log_group_name
+      LogStreamName: name
+    read_actions:
+      - logs:DescribeLogStreams
+    operations:
+      create:
+        - logs:CreateLogStream
+      # `update` is deliberately absent. A log stream has exactly two
+      # configurable attributes, name and log_group_name, and both force
+      # replacement — Terraform plans every change as delete + create, and both
+      # of those are mapped. An omitted operation produces Unchecked, which is
+      # the correct and safe outcome for an operation that cannot occur. Same
+      # reasoning as aws_lambda_layer_version.
+      delete:
+        - logs:DeleteLogStream
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      No tagging: log streams cannot be tagged, so there is no TagResource call
+      and no aws:RequestTag context key to source. That is a property of the
+      service, not an omission.
+
+      logs:PutLogEvents is NOT listed and should not be. Writing events is what
+      the application does at runtime with its own role; Terraform creates the
+      stream empty.
+
+      The three actions above are believed to authorize against the log group
+      rather than the stream. If that is right, this entry's narrow ARN can
+      report a denial for a policy that grants on the bare group ARN — a false
+      positive, and the deliberate trade documented above the arn_format.
+
+      A log stream whose group is managed in the same configuration is the common
+      case, and log_group_name will then be a reference that resolves at plan
+      time, so the ARN usually templates cleanly. Where it does not, the whole
+      ARN degrades to "*" and the finding is caveated.

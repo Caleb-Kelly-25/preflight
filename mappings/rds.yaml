@@ -1,0 +1,317 @@
+# Amazon RDS
+#
+# VERIFICATION STATUS — every entry in this file is `draft`. Nothing here has
+# been near a real apply, and no RDS instance was created to write it: the
+# derivation loop for this service is expensive enough that it has not been run.
+#
+# Two dimensions must hold before an entry is `verified`; see README.md.
+#   1. Names            - action NAMES checked 2026-09-25 via
+#                         accessanalyzer:ValidatePolicy. All 18 rds actions, plus
+#                         the iam: and kms: actions used in `references`, exist
+#                         and are spelled correctly. Zero ERROR findings.
+#   2. Completeness     - NOT established. See the per-entry notes for the
+#                         specific places each list is expected to be short.
+#
+# ARNs. ValidatePolicy checks names only — measured 2026-09-25, it accepts
+# lambda:CreateFunction scoped to an S3 bucket ARN without complaint. So every
+# arn_format below was instead checked against the "Resource types" column of
+# the action table in the RDS page of the Service Authorization Reference, which
+# is the only thing that says which resource type an action authorizes against.
+# That is a reading of a documentation table, not a measurement, and it is the
+# reason the `references` on aws_db_instance are flagged as the likeliest
+# over-report in this file.
+#
+# RCP status: `rds` is NOT in internal/mapping's rcpServices, so resource
+# control policies do not cap these entries. Contrast mappings/logs.yaml.
+#
+# Resource-based policies: RDS has none. There is no PutResourcePolicy-shaped
+# API for a DB instance, subnet group or parameter group, so no entry in this
+# file sets `resource_policy_capable`. The KMS key behind an encrypted instance
+# DOES carry a key policy that SimulatePrincipalPolicy will not evaluate — but
+# that policy belongs to the key, which is a different resource, and the schema
+# has no way to attach the caveat to a reference. See aws_db_instance's notes.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonrds.html
+
+resources:
+  - type: aws_db_instance
+    service: rds
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonrds.html
+    # `identifier` is the instance name and is known at plan time when it is set
+    # explicitly, so a create resolves to a real ARN rather than degrading to
+    # "*". RDS lowercases the identifier server-side; a configuration that
+    # supplies mixed case will template an ARN that does not match the real one.
+    arn_format: "arn:${Partition}:rds:${Region}:${Account}:db:${DBInstanceIdentifier}"
+    arn_attributes:
+      DBInstanceIdentifier: identifier
+    arn_prefix_attributes:
+      DBInstanceIdentifier: identifier_prefix
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    # REASONED, NOT MEASURED. DescribeDBInstances is certain — the provider polls
+    # it to wait for `available` after every create and modify, and reads the
+    # instance back on refresh.
+    #
+    # rds:ListTagsForResource is DELIBERATELY ABSENT and is the single most
+    # likely under-report in this file. See notes.
+    read_actions:
+      - rds:DescribeDBInstances
+
+    operations:
+      create:
+        # Left unconditional even though the two gated actions below replace it
+        # in their respective configurations. A restore or a read replica does
+        # not call CreateDBInstance, so this over-reports for those shapes —
+        # the visible, safe direction. Gating it would be the edit that can
+        # under-report.
+        - rds:CreateDBInstance
+        # RDS documents tag-on-create as needing BOTH the create action and
+        # rds:AddTagsToResource, the same shape as ec2:CreateTags on CreateVpc:
+        # the Tags parameter rides on CreateDBInstance and no separate API call
+        # is made, but the tagging action is still authorized. REASONED from the
+        # tag-on-create documentation, not measured.
+        - action: rds:AddTagsToResource
+          when: { attribute_set: tags }
+        # A different API entirely, not an extra permission on top of
+        # CreateDBInstance. Gated because asking every user of this resource for
+        # a restore permission they will never use is a false positive on
+        # essentially every DB instance in the world.
+        - action: rds:RestoreDBInstanceFromDBSnapshot
+          when: { attribute_set: snapshot_identifier }
+        - action: rds:CreateDBInstanceReadReplica
+          when: { attribute_set: replicate_source_db }
+      update:
+        # Deliberately NOT gated on any attribute. Nearly every in-place change
+        # to a DB instance — class, storage, engine version, backup window,
+        # parameter group, multi-az, password — goes through ModifyDBInstance,
+        # and enumerating that set to gate on it is exactly how a gate comes to
+        # under-report.
+        - rds:ModifyDBInstance
+        - action: rds:AddTagsToResource
+          when: { attribute_changed: [tags] }
+        - action: rds:RemoveTagsFromResource
+          when: { attribute_changed: [tags] }
+      delete:
+        - rds:DeleteDBInstance
+
+    references:
+      # Enhanced monitoring hands a role to the RDS service, so the deploying
+      # identity needs iam:PassRole against that ROLE, not against the instance.
+      # This is the same class of requirement that aws_iam_instance_profile was
+      # measured to need on 2026-09-02 and that AWS's own docs misdirect you
+      # about. monitoring_role_arn already holds an ARN, so no arn_format.
+      - action: iam:PassRole
+        arn_from: monitoring_role_arn
+        operations: [create, update]
+        when: { attribute_set: monitoring_role_arn }
+
+      # REASONED, NOT MEASURED, and over-reporting if wrong. Creating an
+      # instance encrypted with a customer-managed key makes RDS establish a
+      # grant on that key on the caller's behalf. With the default key policy —
+      # which delegates to IAM via the account root principal — the identity
+      # policy must therefore allow these two against the key. An AWS-managed
+      # key (kms_key_id unset) needs neither, which is why both are gated.
+      #
+      # kms_key_id is documented as taking an ARN, so no arn_format. A
+      # configuration that supplies a key id or alias instead will fail to
+      # resolve and fall back to "*" with a visible caveat.
+      - action: kms:CreateGrant
+        arn_from: kms_key_id
+        operations: [create]
+        when: { attribute_set: kms_key_id }
+      - action: kms:DescribeKey
+        arn_from: kms_key_id
+        operations: [create]
+        when: { attribute_set: kms_key_id }
+
+      # THE LIKELIEST OVER-REPORT IN THIS FILE. The Resource types column lists
+      # db-subnet-group and pg alongside db for CreateDBInstance, which means a
+      # request naming them is authorized against their ARNs too — so a policy
+      # scoped only to `db:*` would be denied for real. Encoded because
+      # under-reporting is the unforgivable direction. If the reading is wrong,
+      # this produces a false positive on every DB instance that names a subnet
+      # group or a parameter group, which is most of them. Delete this pair
+      # first if the derivation harness contradicts it.
+      - action: rds:CreateDBInstance
+        arn_from: db_subnet_group_name
+        arn_format: "arn:${Partition}:rds:${Region}:${Account}:subgrp:${Name}"
+        operations: [create]
+        when: { attribute_set: db_subnet_group_name }
+      - action: rds:CreateDBInstance
+        arn_from: parameter_group_name
+        arn_format: "arn:${Partition}:rds:${Region}:${Account}:pg:${Name}"
+        operations: [create]
+        when: { attribute_set: parameter_group_name }
+
+    notes: >-
+      DRAFT. Names checked with accessanalyzer:ValidatePolicy on 2026-09-25 and
+      all exist. Completeness is entirely unestablished — no apply has been run,
+      and no RDS instance was created to write this entry. The one entry in this
+      database that was checked empirically needed 17 actions where 3 were
+      claimed, so assume this list is short rather than long.
+
+      THE FIRST THING TO CHECK: rds:ListTagsForResource is deliberately absent
+      from read_actions, and it is the most likely missing action here. The case
+      for leaving it out is that the last two entries to be derived empirically —
+      aws_vpc and aws_security_group — both listed ec2:DescribeTags and both
+      turned out not to need it, because the provider reads tags back from the
+      resource's own Describe call. DescribeDBInstances does return a TagList,
+      so the same mechanism is available. The case for putting it in is that
+      older provider versions are known to have read RDS tags with a separate
+      ListTagsForResource call, and if any code path still does, every create of
+      a tagged instance reports a false "allowed". The name is valid; only the
+      necessity is unknown. It was left out rather than guessed at, per the
+      standing instruction not to add a ListTagsForResource-shaped action on a
+      hunch, and this paragraph exists so the choice is not silently inherited.
+
+      The `when` gates are reasoning, not measurement, and every one of them
+      removes actions — the one edit that can introduce a false pass.
+      Specifically: rds:AddTagsToResource on create assumes tag-on-create is
+      authorized through the Tags parameter; rds:RestoreDBInstanceFromDBSnapshot
+      and rds:CreateDBInstanceReadReplica assume the provider dispatches to those
+      APIs on exactly the attributes named. If the provider picks the restore
+      path on some other signal, a restore under-reports.
+
+      NOT COVERED, and therefore missing:
+
+      Final snapshots. delete lists only rds:DeleteDBInstance. With
+      skip_final_snapshot = false the call takes a FinalDBSnapshotIdentifier, and
+      whether IAM separately authorizes rds:CreateDBSnapshot for that is
+      unresolved. The name is valid. If it is required, every destroy of an
+      instance that takes a final snapshot under-reports.
+
+      s3_import. Loading from a backup in S3 uses rds:RestoreDBInstanceFromS3
+      plus s3: read permissions on the bucket, and needs iam:PassRole on the
+      import role. None of it is mapped.
+
+      performance_insights_kms_key_id. A second KMS key, a second set of grants.
+      `references` keys on a single attribute per entry so this could be added,
+      but the same uncertainty as the storage key applies and it was not
+      multiplied.
+
+      The master password. manage_master_user_password routes through Secrets
+      Manager and needs secretsmanager: actions on a secret whose ARN is not
+      knowable at plan time.
+
+      The option group. option_group_name is the third resource type on
+      CreateDBInstance's Resource types list and is not encoded as a reference,
+      only the subnet group and the parameter group are. That is an
+      inconsistency, not a judgement: option groups are rare enough that the
+      false-positive cost was judged to outweigh it, which is precisely the
+      reasoning that produces a false pass if it is wrong.
+
+  - type: aws_db_subnet_group
+    service: rds
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonrds.html
+    arn_format: "arn:${Partition}:rds:${Region}:${Account}:subgrp:${Name}"
+    arn_attributes:
+      Name: name
+    arn_prefix_attributes:
+      Name: name_prefix
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+    # REASONED. DescribeDBSubnetGroups is the resource's own read, and its
+    # response carries the subnet list the provider compares against. As with
+    # aws_db_instance, rds:ListTagsForResource is deliberately absent; see that
+    # entry's notes for the argument on both sides.
+    read_actions:
+      - rds:DescribeDBSubnetGroups
+    operations:
+      create:
+        - rds:CreateDBSubnetGroup
+        - action: rds:AddTagsToResource
+          when: { attribute_set: tags }
+      update:
+        - rds:ModifyDBSubnetGroup
+        - action: rds:AddTagsToResource
+          when: { attribute_changed: [tags] }
+        - action: rds:RemoveTagsFromResource
+          when: { attribute_changed: [tags] }
+      delete:
+        - rds:DeleteDBSubnetGroup
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      RDS lowercases subnet group names, so a configuration supplying mixed case
+      templates an ARN that will not match the real resource. That produces a
+      denial against a policy that would have allowed the call — a false
+      positive, the safe direction, but visible and wrong.
+
+      No ec2: actions are listed. The subnet ids are validated by the RDS service
+      rather than read by the provider, so the deploying identity is believed NOT
+      to need ec2:DescribeSubnets. Believed, not measured; if the provider
+      resolves or validates the subnets client-side this under-reports.
+
+  - type: aws_db_parameter_group
+    service: rds
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonrds.html
+    arn_format: "arn:${Partition}:rds:${Region}:${Account}:pg:${Name}"
+    arn_attributes:
+      Name: name
+    arn_prefix_attributes:
+      Name: name_prefix
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+    # Two separate APIs, and both are believed load-bearing: the group's metadata
+    # comes from DescribeDBParameterGroups, while the parameter VALUES the
+    # provider diffs against come from DescribeDBParameters, which is a distinct
+    # action. REASONED, not measured.
+    read_actions:
+      - rds:DescribeDBParameterGroups
+      - rds:DescribeDBParameters
+    operations:
+      create:
+        - rds:CreateDBParameterGroup
+        - action: rds:AddTagsToResource
+          when: { attribute_set: tags }
+        # CreateDBParameterGroup takes no parameters — it creates an empty group
+        # at the engine defaults, and every `parameter` block is applied by a
+        # following ModifyDBParameterGroup. This is the same shape as
+        # s3:PutBucketTagging on a bucket create: a genuine second call, gated
+        # because a group declaring no parameters genuinely does not make it.
+        - action: rds:ModifyDBParameterGroup
+          when: { attribute_set: parameter }
+      update:
+        - rds:ModifyDBParameterGroup
+        # Removing a `parameter` block does not delete the parameter; it resets
+        # it to the engine default, which is a different action. Listed
+        # unconditionally on update rather than gated on `parameter` changing,
+        # because the provider may reset on shapes this reasoning does not
+        # anticipate.
+        - rds:ResetDBParameterGroup
+        - action: rds:AddTagsToResource
+          when: { attribute_changed: [tags] }
+        - action: rds:RemoveTagsFromResource
+          when: { attribute_changed: [tags] }
+      delete:
+        - rds:DeleteDBParameterGroup
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      rds:DescribeEngineDefaultParameters is deliberately absent and is the
+      likeliest missing action in this entry. To tell a user-set parameter from
+      an engine default the provider has to know the defaults, and it may fetch
+      them rather than infer them from the `source` field DescribeDBParameters
+      returns. The name is valid — it was checked — and only the necessity is
+      unknown. If the provider does call it, every create of a parameter group
+      reports a false "allowed".
+
+      The rds:ModifyDBParameterGroup gate on create is reasoned from the API
+      shape (CreateDBParameterGroup has no parameters argument) rather than
+      measured. It is a gate, so it can under-report: a group whose parameters
+      arrive by some route this reasoning does not see would lose the action.
+
+      skip_destroy is not modelled. A group left in place on destroy makes no
+      API call at all, so delete over-reports for it.
+
+      Whether a parameter group can be modified while a DB instance is using it,
+      and whether the provider reboots the instance to apply pending-reboot
+      parameters — which would need rds:RebootDBInstance on a DIFFERENT resource
+      — is unresolved and unmapped.
