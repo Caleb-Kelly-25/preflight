@@ -3,7 +3,10 @@
 # VERIFICATION STATUS — see the per-entry status fields.
 #
 # Two dimensions must hold before an entry is `verified`; see README.md.
-#   1. Names and ARNs   - checked via accessanalyzer:ValidatePolicy.
+#   1. Names            - checked via accessanalyzer:ValidatePolicy. That
+#                         validates NAMES ONLY; it does not check that an action
+#                         can apply to the ARN it is scoped to, so the
+#                         arn_formats below remain unverified.
 #   2. Completeness     - proven only by granting a role exactly the mapped
 #                         actions and running a real terraform apply.
 #
@@ -114,6 +117,9 @@ resources:
   - type: aws_security_group
     service: ec2
     status: draft
+    # Create was derived by the harness against provider 6.63.0 on 2026-09-25:
+    # sufficiency proven, minimality proven. Delete and update were not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html
     arn_format: "arn:${Partition}:ec2:${Region}:${Account}:security-group/${GroupId}"
     arn_attributes:
@@ -121,10 +127,13 @@ resources:
     context_keys:
       "aws:RequestTag/*":
         from: tags
+    # Measured load-bearing. The first draft of this entry also listed
+    # ec2:DescribeSecurityGroupRules and ec2:DescribeTags; the derivation proved
+    # both unnecessary. That is the second time ec2:DescribeTags has been a
+    # surplus guess — aws_vpc had it too — so the provider evidently reads tags
+    # back from the resource's own Describe call rather than separately.
     read_actions:
       - ec2:DescribeSecurityGroups
-      - ec2:DescribeSecurityGroupRules
-      - ec2:DescribeTags
     operations:
       create:
         - ec2:CreateSecurityGroup
@@ -154,3 +163,24 @@ resources:
           when: { attribute_changed: [tags] }
       delete:
         - ec2:DeleteSecurityGroup
+    notes: >-
+      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
+      sufficiency proven, minimality proven, 11 attempts. The six actions above
+      are each load-bearing; the first draft also claimed
+      ec2:DescribeSecurityGroupRules and ec2:DescribeTags, and both were proven
+      unnecessary.
+
+      The fixture (derivefixtures/aws_security_group) sets tags, an ingress rule
+      AND an egress rule on purpose. The egress rule is the subtle one: AWS
+      attaches an allow-all egress rule to every new security group, and
+      Terraform must revoke it before applying its own. A fixture without egress
+      would never exercise ec2:RevokeSecurityGroupEgress and would under-report
+      for everyone who restricts egress.
+
+      Because the fixture sets all three attributes, every `when` gate above was
+      true throughout. The gates are therefore still reasoning, not measurement:
+      an untagged group, or one with no rules, was never tested.
+
+      Update and delete are unverified. Delete in particular is never exercised
+      by the harness, which tears down with operator credentials so that teardown
+      cannot fail for want of the permission being searched for.

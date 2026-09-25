@@ -1,0 +1,304 @@
+# AWS Lambda
+#
+# VERIFICATION STATUS — every entry in this file is `draft`. Nothing here has
+# been near a real apply.
+#
+# Two dimensions must hold before an entry is `verified`; see README.md.
+#   1. Names and ARNs   - action NAMES checked 2026-09-25 via
+#                         accessanalyzer:ValidatePolicy. All 34 lambda actions
+#                         used below exist and are spelled correctly.
+#   2. Completeness     - NOT established. No apply has been run against these.
+#
+# A caveat about dimension 1 that is worth recording, because README.md step 1
+# reads as though it covers more than it does. ValidatePolicy checks action
+# names, NOT whether an action accepts the resource type you scoped it to.
+# Measured 2026-09-25: a statement granting `lambda:CreateFunction` on
+# `arn:aws:s3:::my-bucket` produces zero findings of any severity, and so does
+# `ecs:CreateService` on a cluster ARN. So every arn_format in this file is
+# reasoned from the service authorization reference and is UNVERIFIED. A
+# wrongly-shaped ARN does not fail loudly — it produces an implicit deny against
+# a policy that would really have allowed the call, i.e. a false positive.
+#
+# RCP status: `lambda` is NOT in internal/mapping's rcpServices, so resource
+# control policies do not cap these entries. Note that `ecr` IS, which matters
+# for container-image functions — but the ECR repository is a different resource
+# type and is not mapped here.
+#
+# Resource-based policies ARE a factor: a Lambda function carries one, and
+# SimulatePrincipalPolicy will not evaluate it for a role. See the per-entry
+# resource_policy_capable fields.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
+
+resources:
+  - type: aws_lambda_function
+    service: lambda
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
+    # function_name is a bare name here (it is the resource's own name), so it
+    # templates cleanly AND — unlike `arn` — it is known at plan time, so a
+    # create resolves to a real ARN instead of degrading to "*".
+    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:function:${FunctionName}"
+    arn_attributes:
+      FunctionName: function_name
+    # A function that does not exist yet has no policy to deny its creation;
+    # once it exists, its resource policy governs calls against it. Same
+    # reasoning as aws_s3_bucket.
+    resource_policy_capable: [update, delete]
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    # REASONED, NOT MEASURED. GetFunction is certain. The other three are the
+    # provider's per-read side calls as best as can be established without an
+    # apply; see notes for what was deliberately left out and why.
+    read_actions:
+      - lambda:GetFunction
+      - lambda:GetFunctionCodeSigningConfig
+      - lambda:GetRuntimeManagementConfig
+      - lambda:ListVersionsByFunction
+      - lambda:ListTags
+
+    operations:
+      create:
+        - lambda:CreateFunction
+        # CreateFunction accepts a Tags parameter, and Lambda authorises
+        # lambda:TagResource for it — the same shape as ec2:CreateTags on
+        # CreateVpc, where no separate API call is made but the action is still
+        # required. REASONED from AWS's tag-on-create documentation, not
+        # measured.
+        - action: lambda:TagResource
+          when: { attribute_set: tags }
+        - action: lambda:PutFunctionConcurrency
+          when: { attribute_set: reserved_concurrent_executions }
+        - action: lambda:PutRuntimeManagementConfig
+          when: { attribute_set: runtime_management_config }
+      update:
+        # Deliberately NOT gated on the code attributes. Gating is the edit that
+        # can under-report, and the set that triggers a code update is large
+        # (filename, s3_bucket, s3_key, s3_object_version, image_uri,
+        # source_code_hash); missing one produces a false pass. This
+        # over-reports on a tags-only change.
+        - lambda:UpdateFunctionCode
+        - lambda:UpdateFunctionConfiguration
+        - action: lambda:PublishVersion
+          when: { attribute_set: publish }
+        - action: lambda:TagResource
+          when: { attribute_changed: [tags] }
+        - action: lambda:UntagResource
+          when: { attribute_changed: [tags] }
+        - action: lambda:PutFunctionConcurrency
+          when: { attribute_changed: [reserved_concurrent_executions] }
+        - action: lambda:DeleteFunctionConcurrency
+          when: { attribute_changed: [reserved_concurrent_executions] }
+        - action: lambda:PutFunctionCodeSigningConfig
+          when: { attribute_changed: [code_signing_config_arn] }
+        - action: lambda:DeleteFunctionCodeSigningConfig
+          when: { attribute_changed: [code_signing_config_arn] }
+        - action: lambda:PutRuntimeManagementConfig
+          when: { attribute_changed: [runtime_management_config] }
+      delete:
+        - lambda:DeleteFunction
+
+    # The textbook iam:PassRole case, and the reason this service was mapped.
+    # `role` is documented as an ARN and holds one, so no arn_format is needed —
+    # contrast aws_iam_instance_profile.role, which holds a bare name.
+    #
+    # Deleting a function does not pass the role, hence the operation scoping.
+    references:
+      - action: iam:PassRole
+        arn_from: role
+        operations: [create, update]
+        when: { attribute_set: role }
+
+    notes: >-
+      DRAFT. Action names were checked with accessanalyzer:ValidatePolicy on
+      2026-09-25 and all exist. Completeness is entirely unestablished — no
+      apply has been run — and the one entry in this database that was checked
+      empirically turned out to need 17 actions where 3 were claimed, so assume
+      this list is short rather than long.
+
+      read_actions is the part most likely to be wrong, and it is wrong in the
+      dangerous direction if it is short. GetFunction is certain. Three
+      judgement calls were made, and they are recorded here so a reviewer does
+      not have to rediscover them:
+
+      lambda:GetPolicy is deliberately EXCLUDED. The function's own read does not
+      appear to fetch its resource policy — that is aws_lambda_permission's read.
+      If that is wrong, every create of a function under-reports.
+
+      lambda:GetFunctionConcurrency is deliberately EXCLUDED. GetFunction returns
+      the Concurrency block inline, so a separate authorisation should not be
+      required.
+
+      lambda:ListTags is INCLUDED and may over-report. GetFunction also returns
+      Tags, so the provider may never call ListTags. Over-reporting produces a
+      visible false positive rather than a silent pass, which is why it was left
+      in rather than out.
+
+      The reserved_concurrent_executions gate does less than it looks like it
+      does: the provider defaults that attribute to -1, and isSet() treats any
+      non-nil number as set, so lambda:PutFunctionConcurrency will be requested
+      for almost every function. That is over-reporting, not under-reporting.
+
+      NOT EXPRESSIBLE, and therefore missing:
+
+      Attaching layers. CreateFunction with a `layers` list requires
+      lambda:GetLayerVersion against each layer version ARN. `references` takes a
+      single scalar attribute, and `layers` is a list, so this cannot be encoded
+      and a function using layers will under-report.
+
+      Deploying code from S3. CreateFunction/UpdateFunctionCode with s3_bucket
+      and s3_key is believed to require the CALLER to hold s3:GetObject on that
+      object. Cross-service and unconfirmed.
+
+      Container images. image_uri pulls from ECR, which is RCP-governed and
+      likely needs ecr:GetDownloadUrlForLayer, ecr:BatchGetImage and
+      ecr:GetAuthorizationToken. Unconfirmed, and not expressible here.
+
+      VPC configuration. vpc_config is applied by the Lambda service using its
+      own service-linked role, so the deploying identity is believed NOT to need
+      ec2:CreateNetworkInterface. Believed, not measured.
+
+  - type: aws_lambda_permission
+    service: lambda
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
+    # DELIBERATELY NO arn_format. See notes — `function_name` is polymorphic and
+    # templating it would be wrong half the time.
+    #
+    # This resource manipulates the function's resource-based policy directly,
+    # and it always acts on a function that already exists — so unlike the
+    # function itself, its `create` is resource-policy-capable too.
+    resource_policy_capable: [create, update, delete]
+    read_actions:
+      - lambda:GetPolicy
+    operations:
+      create:
+        - lambda:AddPermission
+      update:
+        - lambda:AddPermission
+        - lambda:RemovePermission
+      delete:
+        - lambda:RemovePermission
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      NO arn_format ON PURPOSE. `function_name` accepts either a bare function
+      name or a full function ARN, and both spellings are common in the wild
+      (`aws_lambda_function.x.function_name` versus `aws_lambda_function.x.arn`).
+      The schema has no way to say "use the value as-is if it is already an ARN,
+      otherwise template it". Templating unconditionally would produce
+      arn:...:function:arn:...:function:name for the ARN spelling — a
+      syntactically plausible ARN that matches no real policy, which is a
+      confident wrong answer. Leaving it out degrades to "*" with a visible
+      arn_not_resolvable caveat instead. That loses scoping and is the honest
+      trade; if the schema ever grows an "already an ARN" marker, this entry
+      wants it first.
+
+      Most changes to this resource force replacement rather than an in-place
+      update, so the update list is reasoning rather than observation. It is
+      listed as Add+Remove because a statement_id-preserving change would have
+      to replace the statement.
+
+  - type: aws_lambda_event_source_mapping
+    service: lambda
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
+    # The UUID is assigned by AWS, so this resolves on update and delete (from
+    # the before state) and degrades to "*" on create. That degradation is
+    # harmless here: CreateEventSourceMapping is authorised against the FUNCTION
+    # rather than the mapping, which this entry cannot express anyway.
+    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:event-source-mapping:${UUID}"
+    arn_attributes:
+      UUID: uuid
+    # Every operation acts on a function that already exists, and that function
+    # carries a resource policy simulation will not evaluate. Listing all three
+    # over-claims if Lambda function policies cannot in practice deny
+    # CreateEventSourceMapping; under-claiming here would be a correctness bug,
+    # so it is claimed.
+    resource_policy_capable: [create, update, delete]
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+    read_actions:
+      - lambda:GetEventSourceMapping
+    operations:
+      create:
+        - lambda:CreateEventSourceMapping
+        - action: lambda:TagResource
+          when: { attribute_set: tags }
+      update:
+        - lambda:UpdateEventSourceMapping
+        - action: lambda:TagResource
+          when: { attribute_changed: [tags] }
+        - action: lambda:UntagResource
+          when: { attribute_changed: [tags] }
+      delete:
+        - lambda:DeleteEventSourceMapping
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      No iam:PassRole here: the execution role was passed when the function was
+      created, and an event source mapping does not pass a role of its own.
+
+      What the source requires of the CALLER is not covered. Reading from SQS,
+      Kinesis, DynamoDB Streams or MSK is done by the function's EXECUTION role,
+      not the deploying identity, so no sqs:/kinesis:/dynamodb: actions are
+      listed. That is the belief this entry rests on and it has not been tested;
+      if CreateEventSourceMapping validates the source with the caller's
+      credentials, this entry under-reports.
+
+      The `uuid` attribute name should be confirmed against the provider — it is
+      the documented attribute, but if the ARN variable is sourced from the wrong
+      name the result degrades to "*" silently rather than failing.
+
+  - type: aws_lambda_layer_version
+    service: lambda
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
+    # Lambda has two ARN shapes here: `layer:${LayerName}` (the layer, which
+    # PublishLayerVersion is authorised against) and `layer:${LayerName}:${Ver}`
+    # (the version, which DeleteLayerVersion and GetLayerVersion take).
+    # arn_format holds one. The unversioned form is used because layer_name is
+    # known at plan time while the version number is assigned by AWS — so this
+    # is the only one of the two that can ever resolve on a create. See notes
+    # for what that costs on delete.
+    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:layer:${LayerName}"
+    arn_attributes:
+      LayerName: layer_name
+    # A layer version can carry a permission policy (AddLayerVersionPermission).
+    # On create the version does not exist yet, so nothing can deny it; on
+    # delete the read-back of an existing version can be.
+    resource_policy_capable: [delete]
+    read_actions:
+      - lambda:GetLayerVersion
+    operations:
+      create:
+        - lambda:PublishLayerVersion
+      # `update` is deliberately absent. Layer versions are immutable: every
+      # change forces a new version, which Terraform plans as replacement
+      # (delete + create), both of which are mapped. An omitted operation
+      # produces Unchecked, which is the correct and safe outcome for an
+      # operation that cannot occur.
+      delete:
+        - lambda:DeleteLayerVersion
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      THE KNOWN DEFECT IN THIS ENTRY is the ARN. DeleteLayerVersion and
+      GetLayerVersion are authorised against the VERSIONED ARN
+      (layer:name:3), but this entry scopes them to the unversioned layer ARN
+      (layer:name). A policy written as `arn:aws:lambda:*:*:layer:my-layer:*` —
+      the usual spelling — will not match the ARN this entry builds, so a delete
+      can report a denial that would not happen in reality. That is a false
+      positive, the safe direction, but it is still wrong and it is the first
+      thing to fix when the schema can express per-action ARN shapes.
+
+      The alternative was to scope everything to the versioned ARN, which cannot
+      resolve on create because AWS assigns the version. Neither choice is
+      correct for both operations.
+
+      Layers are also the other half of the aws_lambda_function gap: a function
+      that lists this layer needs lambda:GetLayerVersion against it, and that
+      requirement lives on the function, which cannot express it.

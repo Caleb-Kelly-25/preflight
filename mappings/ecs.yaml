@@ -1,0 +1,243 @@
+# Amazon Elastic Container Service
+#
+# VERIFICATION STATUS — every entry in this file is `draft`. Nothing here has
+# been near a real apply.
+#
+# Two dimensions must hold before an entry is `verified`; see README.md.
+#   1. Names and ARNs   - action NAMES checked 2026-09-25 via
+#                         accessanalyzer:ValidatePolicy. All 17 ecs actions used
+#                         below exist and are spelled correctly.
+#   2. Completeness     - NOT established.
+#
+# The same caveat recorded in lambda.yaml applies: ValidatePolicy validates
+# action names but NOT action/resource compatibility. Measured 2026-09-25,
+# `ecs:CreateService` scoped to a CLUSTER ARN produces zero findings of any
+# severity. Every arn_format here is reasoned from the service authorization
+# reference and is unverified.
+#
+# RCP status: `ecs` is NOT in internal/mapping's rcpServices, so resource
+# control policies do not cap these entries. `ecr` IS — which matters because
+# almost every task definition pulls its image from ECR — but the repository is
+# a separate resource type and is not mapped here.
+#
+# ECS resources do not carry resource-based policies, so no entry in this file
+# sets resource_policy_capable. Contrast lambda.yaml, where the function does.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html
+
+resources:
+  - type: aws_ecs_cluster
+    service: ecs
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html
+    arn_format: "arn:${Partition}:ecs:${Region}:${Account}:cluster/${ClusterName}"
+    arn_attributes:
+      ClusterName: name
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+    # REASONED, NOT MEASURED. DescribeClusters is certain. ListTagsForResource
+    # may be redundant — DescribeClusters accepts an `include: [TAGS]` parameter
+    # and the provider may use it instead. Kept because over-reporting is the
+    # safe direction; see notes.
+    read_actions:
+      - ecs:DescribeClusters
+      - ecs:ListTagsForResource
+    operations:
+      create:
+        - ecs:CreateCluster
+        # CreateCluster accepts tags inline, and ECS documents that tagging on
+        # create additionally requires ecs:TagResource. Same shape as
+        # ec2:CreateTags on CreateVpc. REASONED from the docs, not measured.
+        - action: ecs:TagResource
+          when: { attribute_set: tags }
+      update:
+        - ecs:UpdateCluster
+        - action: ecs:UpdateClusterSettings
+          when: { attribute_changed: [setting] }
+        - action: ecs:TagResource
+          when: { attribute_changed: [tags] }
+        - action: ecs:UntagResource
+          when: { attribute_changed: [tags] }
+      delete:
+        - ecs:DeleteCluster
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      ecs:UpdateCluster is left ungated while ecs:UpdateClusterSettings is gated
+      on `setting`. Both APIs exist and overlap: UpdateCluster covers the
+      configuration and service-connect defaults, UpdateClusterSettings covers
+      containerInsights. Which one the provider calls for a containerInsights
+      change is unconfirmed, so the broader one is unconditional and the narrow
+      one is gated — asking for slightly too much rather than too little. The
+      `setting` gate is reasoned, not measured, and narrowing with `when` is the
+      one edit that can cause a false pass.
+
+      ecs:PutClusterCapacityProviders is NOT listed. Capacity provider
+      association moved out of aws_ecs_cluster into
+      aws_ecs_cluster_capacity_providers in provider v5, and that type is not
+      mapped. A configuration still using the inline form will under-report.
+
+      ListTagsForResource may be over-reporting; see the read_actions comment.
+
+  - type: aws_ecs_task_definition
+    service: ecs
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html
+    # The revision is assigned by AWS. That makes this template resolve on
+    # delete (from the before state, where the revision is known) and degrade to
+    # "*" on create — which is the right answer anyway, because
+    # RegisterTaskDefinition supports no resource-level scoping and can only be
+    # granted on "*". The operation that needs a real ARN,
+    # DeregisterTaskDefinition, is the one where it resolves.
+    arn_format: "arn:${Partition}:ecs:${Region}:${Account}:task-definition/${Family}:${Revision}"
+    arn_attributes:
+      Family: family
+      Revision: revision
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+    read_actions:
+      - ecs:DescribeTaskDefinition
+      - ecs:ListTagsForResource
+    operations:
+      create:
+        - ecs:RegisterTaskDefinition
+        - action: ecs:TagResource
+          when: { attribute_set: tags }
+      update:
+        # A task definition is immutable, so an "update" registers a NEW
+        # revision and then deregisters the old one (unless skip_destroy is
+        # set). Both actions are therefore required for an in-place change, and
+        # DeregisterTaskDefinition is the one most likely to be forgotten by
+        # anyone writing this policy by hand.
+        - ecs:RegisterTaskDefinition
+        - ecs:DeregisterTaskDefinition
+        - action: ecs:TagResource
+          when: { attribute_changed: [tags] }
+        - action: ecs:UntagResource
+          when: { attribute_changed: [tags] }
+      delete:
+        - ecs:DeregisterTaskDefinition
+
+    # The second reason this service was mapped. Both attributes hold complete
+    # role ARNs, so neither needs an arn_format — contrast
+    # aws_iam_instance_profile.role, which holds a bare name.
+    #
+    # Two distinct roles, two distinct PassRole checks against two distinct
+    # ARNs: the execution role is what pulls the image and writes logs, the task
+    # role is what the container code itself assumes. A policy commonly grants
+    # PassRole on one and not the other, which is exactly the gap this tool
+    # exists to catch.
+    #
+    # Scoped to create and update because deregistering a revision does not pass
+    # a role.
+    references:
+      - action: iam:PassRole
+        arn_from: execution_role_arn
+        operations: [create, update]
+        when: { attribute_set: execution_role_arn }
+      - action: iam:PassRole
+        arn_from: task_role_arn
+        operations: [create, update]
+        when: { attribute_set: task_role_arn }
+
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      The iam:PassRole requirement on both role attributes is the highest-value
+      part of this entry and also the least likely to be wrong — AWS documents
+      it directly for RegisterTaskDefinition, unlike the instance-profile case
+      where the docs actively mislead. What IS unconfirmed is whether
+      RegisterTaskDefinition additionally requires
+      iam:PassRole on the roles named inside individual container definitions
+      (there are none in the standard schema) and whether a task definition with
+      no roles at all still needs it.
+
+      ecs:DeleteTaskDefinitions exists as an action and is NOT listed. The
+      provider deregisters rather than hard-deletes, so it should not be needed;
+      if a future provider version starts hard-deleting, this entry
+      under-reports.
+
+      Pulling the container image is done by the EXECUTION role at task launch,
+      not by the deploying identity, so no ecr: actions are listed here. That is
+      a belief this entry rests on, not a measurement.
+
+      The `revision` attribute is unknown until apply on a create, so a create
+      simulates against "*". That is inherent rather than a gap: AWS assigns the
+      revision, and RegisterTaskDefinition takes "*" regardless.
+
+  - type: aws_ecs_service
+    service: ecs
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html
+    # DELIBERATELY NO arn_format. See notes — the service ARN needs the cluster
+    # NAME, and the `cluster` attribute may hold either a name or an ARN.
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+    read_actions:
+      - ecs:DescribeServices
+      - ecs:ListTagsForResource
+    operations:
+      create:
+        - ecs:CreateService
+        - action: ecs:TagResource
+          when: { attribute_set: tags }
+      update:
+        - ecs:UpdateService
+        - action: ecs:TagResource
+          when: { attribute_changed: [tags] }
+        - action: ecs:UntagResource
+          when: { attribute_changed: [tags] }
+      delete:
+        - ecs:DeleteService
+        # Unless force_delete is set, the provider scales the service to zero
+        # with UpdateService before calling DeleteService. Left unconditional
+        # rather than gated on force_delete: gating is the edit that can
+        # under-report, and a destroy that fails halfway through on a missing
+        # UpdateService is a worse outcome than asking for one extra action.
+        - ecs:UpdateService
+
+    # `iam_role` is the legacy Classic-Load-Balancer path, used only when the
+    # task definition is not awsvpc. The provider documents it as an ARN, so no
+    # arn_format. The ECS API also accepts a bare name there; a configuration
+    # passing a name would resolve to a non-ARN string and the check would be
+    # wrong — recorded rather than guessed around.
+    #
+    # Create only: UpdateService does not take a role.
+    references:
+      - action: iam:PassRole
+        arn_from: iam_role
+        operations: [create]
+        when: { attribute_set: iam_role }
+
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      NO arn_format ON PURPOSE. An ECS service ARN is
+      arn:...:service/<cluster-name>/<service-name>, so building it needs the
+      cluster NAME — but the `cluster` attribute holds either a bare name or a
+      full cluster ARN, and `cluster = aws_ecs_cluster.x.id` (an ARN) is at
+      least as common as the name form. Templating unconditionally would embed
+      an ARN inside an ARN for the common case: a confident wrong answer that
+      matches no real policy. Leaving it out degrades to "*" with a visible
+      arn_not_resolvable caveat. Same trade as aws_lambda_permission, same fix
+      needed in the schema.
+
+      This entry does NOT list iam:PassRole for the task definition's execution
+      or task roles, and that is deliberate — those are passed at
+      RegisterTaskDefinition time and belong to aws_ecs_task_definition. People
+      writing these policies by hand often assume the opposite.
+
+      NOT EXPRESSIBLE, and therefore missing: creating the first ECS service in
+      an account creates the ECS service-linked role, which requires
+      iam:CreateServiceLinkedRole. There is no attribute to hang it off, and
+      making it unconditional would produce a false positive on every
+      subsequent service in the account.
+
+      Also unconfirmed: whether CreateService with a `load_balancer` block
+      requires elasticloadbalancing: actions from the DEPLOYING identity, or
+      whether ECS does that work through its service-linked role. Believed the
+      latter, which is why none are listed. If that belief is wrong this entry
+      under-reports for every load-balanced service.
