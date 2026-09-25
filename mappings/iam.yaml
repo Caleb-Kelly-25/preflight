@@ -1,26 +1,27 @@
 # AWS Identity and Access Management
 #
-# VERIFICATION STATUS — all entries remain `draft`.
+# VERIFICATION STATUS — see the per-entry verified_operations fields.
 #
-# Checked 2026-09-01 against AWS's own policy validator
-# (accessanalyzer:ValidatePolicy, which is authoritative for action names):
-#   ✓ all 19 action names below exist and are spelled correctly
-#   ✓ every arn_format matches the resource type its actions accept
+# Names checked against AWS's own policy validator
+# (accessanalyzer:ValidatePolicy), which is authoritative for action names.
 #
-# NOT checked, and the reason these are still draft:
-#   ✗ COMPLETENESS. Nothing here establishes that Terraform's apply needs only
-#     these actions. A missing action produces a false "allowed" for a deploy
-#     that will fail, so name correctness alone is not enough to promote an
-#     entry. See mappings/README.md.
+# An earlier version of this header also claimed the validator confirmed "every
+# arn_format matches the resource type its actions accept". It does not.
+# Measured 2026-09-25: the validator checks NAMES ONLY and reports nothing at
+# all for an action scoped to a resource type it cannot apply to. The
+# arn_formats below are therefore unverified, and the way to check one is the
+# "Resource types" column of the action table in the Service Authorization
+# Reference. See mappings/README.md.
 #
-# Known suspected gaps, listed rather than guessed at:
-#   - iam:TagRole / iam:TagPolicy are mapped unconditionally, but are only
-#     needed when tags are set. This OVER-reports, which causes false positives
-#     rather than false negatives — the safer direction, but still wrong.
+# COMPLETENESS is the dimension that matters, because a missing action produces
+# a false "allowed" for a deploy that will fail. Three entries here have had
+# their create path derived empirically; every other operation is reasoning.
+#
+# Known gaps, listed rather than guessed at:
 #   - Deleting a role that still has inline policies or attachments requires
 #     removing them first; whether the provider does that itself is unresolved.
-#   - iam:PassRole is needed by whichever resource HANDS a role to a service,
-#     not by the role. The schema cannot express that yet.
+#   - Update paths are unverified throughout. They are the hardest to derive,
+#     because the required actions depend on which attributes changed.
 #
 # Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
 
@@ -111,25 +112,49 @@ resources:
   - type: aws_iam_policy
     service: iam
     status: draft
+    # Create derived by the harness 2026-09-25; update and delete were not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:policy/${PolicyName}"
     arn_attributes:
       PolicyName: name
     arn_prefix_attributes:
       PolicyName: name_prefix
+    # DERIVED 2026-09-25. Both were missing, and both are read-backs: the entry
+    # declared no read_actions at all, which is now the third time that shape
+    # has under-reported, after aws_s3_bucket (by 14) and aws_iam_role (by 5).
+    read_actions:
+      - iam:GetPolicy
+      - iam:GetPolicyVersion
     operations:
       create:
         - iam:CreatePolicy
-        - iam:TagPolicy
+        # Gated by analogy with iam:TagRole, whose mechanism is identical —
+        # CreatePolicy takes tags as a parameter and IAM authorises the tagging
+        # action for them with no separate call. The gate itself is REASONED,
+        # not measured: the fixture always sets tags, so the untagged case was
+        # never exercised.
+        - action: iam:TagPolicy
+          when: { attribute_set: tags }
       update:
         - iam:CreatePolicyVersion
         - iam:DeletePolicyVersion
       delete:
         - iam:DeletePolicy
     notes: >-
-      Terraform updates a managed policy by creating a new version, and prunes
-      old versions when the five-version limit is reached, hence
-      iam:DeletePolicyVersion on update.
+      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
+      sufficiency proven, minimality proven, 7 attempts. A role holding exactly
+      iam:CreatePolicy, iam:TagPolicy, iam:GetPolicy and iam:GetPolicyVersion
+      creates a tagged managed policy, and removing any one of the four fails.
+
+      The previous entry claimed two of those and was wrong in the dangerous
+      direction: it would have reported "allowed" for a deploy that cannot
+      succeed.
+
+      Update and delete remain unverified. Terraform updates a managed policy by
+      creating a new version and prunes old ones at the five-version limit,
+      hence iam:DeletePolicyVersion on update — reasoned from provider
+      behaviour, not measured.
 
   - type: aws_iam_role_policy_attachment
     service: iam
