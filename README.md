@@ -3,11 +3,12 @@
 Catch IAM permission gaps between a Terraform plan and the identity that will
 apply it — before merge, without touching a single real resource.
 
-> **Status: works end to end, not yet released.** Checks run against real AWS
-> and produce real findings, including SARIF annotations for pull requests. The
-> mapping database is still small and most entries are `draft`, so coverage is
-> narrow and most results cap at `Likely`. The GitHub Action and released
-> binaries are not built yet. See [Roadmap](#roadmap).
+> **Status: works end to end, first release pending.** Checks run against real
+> AWS and produce real findings, including SARIF annotations for pull requests.
+> The mapping database is still small and most entries are `draft`, so coverage
+> is narrow and most results cap at `Likely`. The release pipeline and the
+> GitHub Action are built, but no version has been tagged yet — until `v0.1.0`
+> exists, `go install` is the only way in. See [Roadmap](#roadmap).
 
 ## The problem
 
@@ -48,7 +49,50 @@ the kind of hedge that trains people to ignore the tool.
 
 ## Install
 
-Requires Go 1.25 or newer until binary releases exist.
+No Go toolchain required. Releases are static, CGO-free binaries for
+linux, darwin and windows on amd64 and arm64.
+
+**Linux / macOS.** Set `VERSION`, `OS` (`linux` or `darwin`) and `ARCH`
+(`amd64` or `arm64`) to match your machine:
+
+```
+VERSION=0.1.0 OS=linux ARCH=amd64
+BASE="https://github.com/Caleb-Kelly-25/preflight/releases/download/v${VERSION}"
+
+curl -fsSLO "${BASE}/preflight_${VERSION}_${OS}_${ARCH}.tar.gz"
+curl -fsSLO "${BASE}/checksums.txt"
+
+# Do not skip this. It is the only thing standing between you and running
+# whatever a compromised mirror handed you.
+sha256sum --ignore-missing -c checksums.txt     # macOS: shasum -a 256 --ignore-missing -c
+
+tar -xzf "preflight_${VERSION}_${OS}_${ARCH}.tar.gz" preflight
+sudo install preflight /usr/local/bin/
+```
+
+**Windows (PowerShell).**
+
+```powershell
+$Version = '0.1.0'
+$Base = "https://github.com/Caleb-Kelly-25/preflight/releases/download/v$Version"
+$Archive = "preflight_${Version}_windows_amd64.tar.gz"
+
+Invoke-WebRequest "$Base/$Archive" -OutFile $Archive
+Invoke-WebRequest "$Base/checksums.txt" -OutFile checksums.txt
+
+$expected = (Select-String -Path checksums.txt -Pattern ([regex]::Escape($Archive))).Line.Split()[0]
+$actual   = (Get-FileHash $Archive -Algorithm SHA256).Hash.ToLower()
+if ($expected -ne $actual) { throw "checksum mismatch for $Archive" }
+
+tar -xzf $Archive preflight.exe
+```
+
+Releases are not signed yet; the checksum is what you have, so check it.
+
+**In GitHub Actions**, use [the Action](#github-action) rather than any of the
+above — it does the download and the checksum verification for you.
+
+**From source**, needing Go 1.25 or newer:
 
 ```
 go install github.com/Caleb-Kelly-25/preflight/cmd/preflight@latest
@@ -126,11 +170,18 @@ code lives under `.terraform/`, which is not in version control, so GitHub could
 not place an annotation there anyway.
 
 A finding whose resource cannot be located is **left out of the report rather
-than emitted without a location**, because GitHub accepts a location-less result
-and then silently fails to place it, which makes the feature look broken instead
-of absent. Every omission is reported three ways — a warning on stderr, an error
-notification inside the SARIF, and `executionSuccessful: false` — because a SARIF
-run with no results otherwise reads as a clean bill of health.
+than emitted without a location**, because GitHub rejects an entire SARIF upload
+when results carry no location — emitting them would lose the good results too.
+
+Omissions are never silent, because a SARIF run with no results reads as a clean
+bill of health. How loudly we can say so depends on the channel, and GitHub's
+supported-properties list contains neither `invocation.executionSuccessful` nor
+`toolExecutionNotifications`. preflight emits both — they are correct SARIF and
+other consumers read them — but **neither reaches a GitHub user**, so neither is
+relied on. What does work: a warning on stderr, and, if *nothing* could be
+located, a non-zero exit. An empty report from a passing step is the failure
+this tool exists to prevent, and the exit code is the only signal CI cannot
+overlook. A partial omission still produces a useful report and only warns.
 
 Verified findings produce no annotation. SARIF results are problems, and burying
 the real ones under a wall of green is how a check stops being read.
@@ -175,6 +226,115 @@ signal that one is in play — an unsupplied condition key can otherwise produce
 confident "allowed" with no warning at all.
 
 Most CI roles do not have these today.
+
+## GitHub Action
+
+A composite action — it downloads a pinned release, verifies its SHA-256
+against the `checksums.txt` published with it, and runs it. Not a Docker
+action: the check itself takes well under a second, so pulling a container
+would cost more than the work.
+
+```yaml
+name: terraform
+on: pull_request
+
+permissions:
+  contents: read
+  id-token: write         # OIDC, so the job holds no long-lived AWS keys
+  security-events: write  # required by upload-sarif
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # preflight uses whatever identity the job already has. It configures
+      # nothing itself and takes no secrets of its own.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/ci-preflight
+          aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - run: terraform init
+      - run: terraform plan -out=tf.plan
+      - run: terraform show -json tf.plan > plan.json
+
+      - id: preflight
+        uses: Caleb-Kelly-25/preflight@v0.1.0
+        with:
+          plan: plan.json
+          format: sarif
+          config-dir: .
+          fail-on: denied
+          # The role that will run apply, which is not the role running the
+          # check. Drop this when they are the same.
+          principal: arn:aws:iam::123456789012:role/terraform-deploy
+
+      # always(), because the step above fails when it finds something — and a
+      # finding nobody can see on the diff is exactly what the annotations are
+      # for.
+      - if: always() && steps.preflight.outputs.sarif-file != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.preflight.outputs.sarif-file }}
+          category: preflight
+```
+
+Runs on `ubuntu-*`, `macos-*` and `windows-*` runners, on x64 and arm64.
+
+### Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `plan` | *(required)* | path to `terraform show -json` output |
+| `fail-on` | `denied` | `denied`, `likely`, or `unchecked` |
+| `format` | `text` | `text`, `json`, or `sarif` |
+| `config-dir` | *(the plan file's directory)* | where the `.tf` files are, relative to the repository root; SARIF only |
+| `principal` | *(the job's own identity)* | ARN of the identity to check |
+| `region` | *(plan, then environment)* | used to build resource ARNs |
+| `version` | *(the action's own version)* | which release to download, e.g. `v0.1.0` |
+
+`version` defaults to the release the action was tagged with, so
+`uses: Caleb-Kelly-25/preflight@v0.1.0` runs the `v0.1.0` binary and nothing
+floats. Set it only to pin a binary different from the action.
+
+### Outputs
+
+| Output | Meaning |
+|---|---|
+| `exit-code` | `0`, `1`, or `2` — the [exit code](#exit-codes) preflight returned |
+| `sarif-file` | absolute path to the SARIF report, set only when `format: sarif` |
+
+The step fails on exit `1` and `2` — both mean "not ready to merge" — but they
+are different failures. `1` is a real finding; `2` is preflight being unable to
+answer at all, which is an outage, not a permission gap. Both are named in the
+log, and `exit-code` keeps the distinction machine-readable:
+
+```yaml
+      - id: preflight
+        uses: Caleb-Kelly-25/preflight@v0.1.0
+        continue-on-error: true      # needed to read the output after a failure
+        with:
+          plan: plan.json
+
+      - if: steps.preflight.outputs.exit-code == '2'
+        run: echo "preflight could not run — this is not a clean result"
+```
+
+Treating `2` as a pass is the one mistake worth guarding against: a check that
+could not run is not a check that succeeded.
+
+### What the job's role needs
+
+The three read-only actions listed under
+[Required AWS permissions](#required-aws-permissions), granted to the identity
+the job assumes — `ci-preflight` in the example above, not the deploy role
+being inspected.
 
 ## Coverage
 
@@ -229,7 +389,12 @@ Near-term, in order:
 3. Broaden the mapping database: EC2, RDS, Lambda, VPC, ECS.
 4. Conditional actions and cross-resource requirements (`iam:PassRole`) in the
    mapping schema.
-5. GitHub Action wrapper and released binaries.
+5. Tag `v0.1.0`. The [GitHub Action](#github-action) and the GoReleaser pipeline
+   that feeds it are written; nothing has been published yet, and until it is,
+   the download instructions above describe artifacts that do not exist.
+6. Sign the release artifacts. The Action verifies checksums today, which
+   protects against a corrupted or swapped archive but not against a compromised
+   release process.
 
 ## Contributing
 

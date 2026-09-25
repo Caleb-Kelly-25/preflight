@@ -1,0 +1,119 @@
+name: Release
+
+# Releases are cut by pushing a tag. Nothing here runs on a branch push, so the
+# only way to publish is deliberate.
+on:
+  push:
+    tags: ['v*']
+
+# Read-only by default. Exactly one job below widens this, and only to
+# `contents: write`, which is what creating a GitHub release needs — the token
+# never gains package, action or workflow scope.
+permissions:
+  contents: read
+
+jobs:
+  # Everything that can say "do not publish this" runs before anything is
+  # published, in a job with no write access at all. A tag that fails here
+  # leaves no half-created release behind.
+  verify:
+    name: verify the tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # GoReleaser builds the changelog from history, and a shallow clone
+          # gives it nothing to diff against.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # action.yml downloads the release matching its own VERSION file when the
+      # caller does not pin one. If that file disagrees with the tag, every
+      # workflow using `@<this tag>` would silently fetch a different binary
+      # than the source it checked out, so the mismatch stops the release.
+      - name: VERSION matches the tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          file="v$(tr -d ' \t\r\n' < VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "tag $tag does not match VERSION ($file)"
+            echo "update VERSION, commit, then retag"
+            exit 1
+          fi
+
+      # The same gates CI applies to a pull request. A tag can be pushed to a
+      # commit CI never saw.
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
+        env:
+          AWS_ACCESS_KEY_ID: ""
+          AWS_SECRET_ACCESS_KEY: ""
+          AWS_SESSION_TOKEN: ""
+          AWS_PROFILE: ""
+          AWS_REGION: ""
+          AWS_EC2_METADATA_DISABLED: "true"
+
+      - name: Vet
+        run: go vet ./...
+
+      # The tagged builds are excluded from every normal build, so a release
+      # could otherwise ship with them broken.
+      - name: Tagged builds still compile
+        run: |
+          go build -tags awsintegration ./...
+          go build -tags awsderive ./...
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: check
+
+      # Proves the ldflags wiring before the real build: a release whose binary
+      # reports "dev" cannot be tied back to a tag by anyone reporting a bug.
+      - name: Version is stamped into the binary
+        run: |
+          go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o /tmp/preflight ./cmd/preflight
+          got="$(/tmp/preflight version)"
+          if [ "$got" != "${GITHUB_REF_NAME}" ]; then
+            echo "preflight version printed '$got', want '${GITHUB_REF_NAME}'"
+            exit 1
+          fi
+
+  release:
+    name: build and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      # Scoped to this job alone: creating the release and uploading the
+      # archives is the only write this pipeline performs.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Cross-compiles for linux, darwin and windows on amd64 and arm64, and
+      # publishes checksums.txt alongside the archives. action.yml refuses to
+      # run a binary that file does not vouch for, so it is part of the
+      # product, not a convenience.
+      #
+      # Not signed yet. That is hardening to add later, not a reason to keep
+      # the tool installable only through `go install`.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

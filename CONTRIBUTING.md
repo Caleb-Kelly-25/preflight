@@ -50,6 +50,29 @@ behind payment will be merged.
 - Update `docs/ARCHITECTURE.md` if you close or change one of the open questions.
 - Commits in the imperative mood: "add ECS mappings", not "added ECS mappings".
 
+## Cutting a release
+
+Maintainers only, and the order matters.
+
+1. Update `VERSION` to the bare version — `0.2.0`, no `v`. `action.yml` reads
+   that file to decide which release to download when a caller does not pin one,
+   so a tag that disagrees with it would make `uses: ...@v0.2.0` fetch some
+   other binary. The release workflow refuses to publish that mismatch rather
+   than leaving it to be discovered in someone else's CI.
+2. Merge it.
+3. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+
+`.github/workflows/release.yml` then re-runs the full test suite, checks the
+tag against `VERSION`, and only afterwards — in a separate job, the only one
+holding `contents: write` — runs GoReleaser to cross-compile, publish the
+archives and publish `checksums.txt`. That checksum file is not decoration: the
+Action refuses to execute a binary it does not vouch for.
+
+`.goreleaser.yaml` and `action.yml` are a matched pair. The archive naming in
+one is reconstructed by the other, so renaming an archive breaks every workflow
+using the Action. CI runs `goreleaser check` and a snapshot build on every pull
+request to keep that from being discovered at tag time.
+
 ## Reporting a problem
 
 For a **wrong mapping**, include the resource type, the action list you expected,

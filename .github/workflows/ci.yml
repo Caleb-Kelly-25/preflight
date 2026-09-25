@@ -123,6 +123,72 @@ jobs:
             exit 1
           fi
 
+  # The release pipeline runs only on a tag, which is the worst possible moment
+  # to discover it is misconfigured — the tag exists by then, and a bad release
+  # is visible to everyone watching the repository. So its configuration is
+  # checked on every pull request instead.
+  release-config:
+    name: release config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: check
+
+      # One target is enough to prove the build, archive and checksum sections
+      # hold together; cross-compiling all six here would cost minutes on every
+      # pull request to catch nothing extra.
+      - name: Snapshot build
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: build --snapshot --clean --single-target
+
+      - name: Snapshot binary reports a version
+        run: |
+          bin=$(find dist -type f -name preflight | head -n 1)
+          got=$("$bin" version)
+          echo "version: $got"
+          if [ -z "$got" ] || [ "$got" = "dev" ]; then
+            echo "ldflags did not stamp a version into the binary"
+            exit 1
+          fi
+
+      # action.yml is YAML nobody parses until a workflow uses it, and a typo
+      # in an input name surfaces as a confusing runtime failure in someone
+      # else's repository.
+      - name: action.yml is well formed
+        run: |
+          python3 - <<'PY'
+          import re, yaml
+
+          action = yaml.safe_load(open("action.yml"))
+          assert action["runs"]["using"] == "composite", "DESIGN §12: composite, not docker"
+
+          want_inputs = {"plan", "fail-on", "format", "config-dir", "principal", "region", "version"}
+          missing = want_inputs - set(action["inputs"])
+          assert not missing, f"action.yml is missing inputs: {sorted(missing)}"
+          assert action["inputs"]["plan"]["required"] is True
+
+          want_outputs = {"exit-code", "sarif-file"}
+          missing = want_outputs - set(action["outputs"])
+          assert not missing, f"action.yml is missing outputs: {sorted(missing)}"
+
+          # VERSION carries no leading "v": the release workflow adds it when
+          # comparing against the tag, and the archive names have it stripped.
+          version = open("VERSION").read().strip()
+          assert re.fullmatch(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?", version), \
+              f"VERSION must be X.Y.Z with an optional pre-release suffix, got {version!r}"
+          PY
+
   # The mapping database is the product's credibility. A structurally broken
   # entry silently reduces coverage in the field, so it gets its own visible
   # check rather than hiding inside the general test job.

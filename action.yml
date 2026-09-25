@@ -1,0 +1,303 @@
+# preflight as a GitHub Action.
+#
+# Composite, not Docker (docs/DESIGN.md §12): the check itself takes well under
+# a second, so container pull and startup would dominate the runtime of every
+# job that used it.
+#
+# This action asks for no secrets and configures no credentials. It runs with
+# whatever AWS identity the job already has — that is the entire point, since
+# the question preflight answers is "can *this* identity apply the plan". If
+# nothing in the job has configured credentials, preflight fails with exit 2
+# rather than checking something else by accident.
+name: preflight
+description: Check whether the identity running terraform apply holds the IAM permissions the plan requires.
+author: Caleb Kelly
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  plan:
+    description: Path to `terraform show -json` output.
+    required: true
+  fail-on:
+    description: Exit non-zero on findings at or above this confidence — denied, likely, or unchecked.
+    required: false
+    default: denied
+  format:
+    description: Output format — text, json, or sarif. With sarif the report is written to a file and its path is exposed as the `sarif-file` output.
+    required: false
+    default: text
+  config-dir:
+    description: Directory holding the .tf files, used for SARIF source locations. Give a path relative to the repository root. Defaults to the plan file's directory.
+    required: false
+    default: ''
+  principal:
+    description: ARN of the identity to check. Defaults to the job's own identity via sts:GetCallerIdentity — set this when the role that will run apply is not the role running the check.
+    required: false
+    default: ''
+  region:
+    description: AWS region used to build resource ARNs. Defaults to the plan's provider config, then the environment.
+    required: false
+    default: ''
+  version:
+    description: Which preflight release to download, e.g. v1.2.3. Defaults to the version this copy of the action was released with.
+    required: false
+    default: ''
+
+outputs:
+  exit-code:
+    description: >-
+      preflight's exit code — 0 nothing above the threshold, 1 findings tripped
+      it, 2 the check could not run. The action step fails on 1 and 2, so set
+      `continue-on-error: true` on the step if you need to tell them apart.
+    value: ${{ steps.run.outputs.exit-code }}
+  sarif-file:
+    description: Path to the SARIF report, set only when `format` is sarif. Empty otherwise.
+    value: ${{ steps.run.outputs.sarif-file }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      name: Resolve the release to download
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        # github.action_repository is empty when the action is used as a local
+        # path (`uses: ./`), which is how this repository tests it, so fall back
+        # to the canonical repository.
+        ACTION_REPOSITORY: ${{ github.action_repository }}
+      run: |
+        set -euo pipefail
+
+        version="$INPUT_VERSION"
+        if [ -z "$version" ]; then
+          # VERSION sits next to this file and records the release this copy of
+          # the action belongs to, so `uses: ...@v1.2.3` downloads the v1.2.3
+          # binary without the caller repeating the version. The release
+          # workflow refuses to publish a tag that disagrees with it.
+          version="$(tr -d ' \t\r\n' < "$GITHUB_ACTION_PATH/VERSION")"
+        fi
+        if [ -z "$version" ]; then
+          echo "::error title=preflight::could not determine which release to download; set the 'version' input"
+          exit 1
+        fi
+        # Accept "1.2.3" and "v1.2.3" from the caller. Tags carry the v; archive
+        # names do not.
+        tag="v${version#v}"
+        bare="${tag#v}"
+
+        # RUNNER_OS / RUNNER_ARCH are set by the runner itself, which is more
+        # reliable than uname — Git Bash on a Windows runner reports a
+        # MINGW64 uname that says nothing useful about the release archives.
+        case "${RUNNER_OS:-}" in
+          Linux)   os=linux ;;
+          macOS)   os=darwin ;;
+          Windows) os=windows ;;
+          *)
+            echo "::error title=preflight::no preflight release exists for runner OS '${RUNNER_OS:-unknown}'"
+            exit 1 ;;
+        esac
+        case "${RUNNER_ARCH:-}" in
+          X64)   arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *)
+            echo "::error title=preflight::no preflight release exists for runner architecture '${RUNNER_ARCH:-unknown}'"
+            exit 1 ;;
+        esac
+
+        exe=preflight
+        if [ "$os" = windows ]; then
+          exe=preflight.exe
+        fi
+
+        repo="${ACTION_REPOSITORY:-}"
+        if [ -z "$repo" ]; then
+          repo="Caleb-Kelly-25/preflight"
+        fi
+
+        # RUNNER_TEMP arrives with Windows separators on a Windows runner, and
+        # a backslash inside a shell path is an escape waiting to happen.
+        tmp="${RUNNER_TEMP//\\//}"
+
+        {
+          echo "tag=$tag"
+          echo "repo=$repo"
+          echo "archive=preflight_${bare}_${os}_${arch}.tar.gz"
+          echo "dir=${tmp}/preflight-${tag}"
+          echo "bin=${tmp}/preflight-${tag}/${exe}"
+          echo "tmp=${tmp}"
+        } >> "$GITHUB_OUTPUT"
+
+    - id: install
+      name: Download and verify the preflight binary
+      shell: bash
+      env:
+        TAG: ${{ steps.resolve.outputs.tag }}
+        REPO: ${{ steps.resolve.outputs.repo }}
+        ARCHIVE: ${{ steps.resolve.outputs.archive }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+        BIN: ${{ steps.resolve.outputs.bin }}
+      run: |
+        set -euo pipefail
+
+        # Using the action twice in one job re-uses the binary verified by the
+        # first invocation rather than downloading and checking it again.
+        if [ -x "$BIN" ]; then
+          echo "preflight $TAG already present at $BIN"
+          exit 0
+        fi
+
+        mkdir -p "$DIR"
+        base="https://github.com/${REPO}/releases/download/${TAG}"
+
+        echo "downloading ${base}/${ARCHIVE}"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+             --retry 3 --retry-delay 2 \
+             --output "${DIR}/${ARCHIVE}" "${base}/${ARCHIVE}"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+             --retry 3 --retry-delay 2 \
+             --output "${DIR}/checksums.txt" "${base}/checksums.txt"
+
+        # The verification below is the whole reason this step exists. A
+        # supply-chain step that downloads an executable and skips the check is
+        # worse than no check at all: it looks like a control and is not one. So
+        # every failure path here exits non-zero, and none of them fall through
+        # to running the binary.
+        expected="$(awk -v f="$ARCHIVE" '$2 == f || $2 == "*" f { print tolower($1) }' "${DIR}/checksums.txt" | head -n 1)"
+        if [ -z "$expected" ]; then
+          echo "::error title=preflight::${ARCHIVE} is not listed in checksums.txt for ${TAG}; refusing to run an unverifiable binary"
+          exit 1
+        fi
+
+        # Linux and Git Bash have sha256sum; macOS ships shasum instead.
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual="$(sha256sum "${DIR}/${ARCHIVE}" | awk '{ print tolower($1) }')"
+        elif command -v shasum >/dev/null 2>&1; then
+          actual="$(shasum -a 256 "${DIR}/${ARCHIVE}" | awk '{ print tolower($1) }')"
+        else
+          echo "::error title=preflight::neither sha256sum nor shasum is available on this runner; cannot verify the download"
+          exit 1
+        fi
+
+        if [ "$expected" != "$actual" ]; then
+          echo "::error title=preflight::checksum mismatch for ${ARCHIVE} — refusing to run it"
+          echo "  expected $expected"
+          echo "  actual   $actual"
+          echo "  source   ${base}"
+          rm -f "${DIR}/${ARCHIVE}"
+          exit 1
+        fi
+        echo "sha256 verified: $actual"
+
+        # Extracted from inside the directory, with a relative archive name.
+        # GNU tar — which is what Git Bash gives a composite action on a
+        # Windows runner — reads "D:/a/_temp/x.tar.gz" as host "D" and tries to
+        # open a network connection, and its --force-local escape hatch does
+        # not exist in the bsdtar macOS ships. A relative name works on both.
+        ( cd "$DIR" && tar -xzf "$ARCHIVE" )
+        chmod +x "$BIN" || true
+        if [ ! -x "$BIN" ]; then
+          echo "::error title=preflight::${ARCHIVE} did not contain an executable at ${BIN}"
+          exit 1
+        fi
+        "$BIN" version
+
+    - id: run
+      name: Run preflight
+      shell: bash
+      env:
+        BIN: ${{ steps.resolve.outputs.bin }}
+        TMP: ${{ steps.resolve.outputs.tmp }}
+        # Inputs are passed through the environment rather than interpolated
+        # into the script: `${{ inputs.plan }}` spliced into a shell line is a
+        # command-injection hole in a workflow anyone can open a pull request
+        # against.
+        PLAN: ${{ inputs.plan }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        FORMAT: ${{ inputs.format }}
+        CONFIG_DIR: ${{ inputs.config-dir }}
+        PRINCIPAL: ${{ inputs.principal }}
+        REGION: ${{ inputs.region }}
+      run: |
+        set -uo pipefail
+
+        args=(check --plan "$PLAN" --fail-on "$FAIL_ON" --format "$FORMAT")
+        if [ -n "$CONFIG_DIR" ]; then args+=(--config-dir "$CONFIG_DIR"); fi
+        if [ -n "$PRINCIPAL" ]; then args+=(--principal "$PRINCIPAL"); fi
+        if [ -n "$REGION" ]; then args+=(--region "$REGION"); fi
+
+        # No AWS_* variable is set here on purpose. preflight uses the
+        # credentials the job already has; an action that quietly supplied its
+        # own would be checking a different identity than the one that runs
+        # apply, which is exactly the failure this tool exists to catch.
+        sarif=""
+        if [ "$FORMAT" = "sarif" ]; then
+          sarif="${TMP}/preflight.sarif"
+          "$BIN" "${args[@]}" > "$sarif"
+          code=$?
+        else
+          "$BIN" "${args[@]}"
+          code=$?
+        fi
+
+        # This step deliberately succeeds whatever preflight returned, so that
+        # the outputs below are always recorded. The next step turns the exit
+        # code into the step's pass/fail.
+        {
+          echo "exit-code=$code"
+          echo "sarif-file=$sarif"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          {
+            echo "### preflight"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| plan | \`$PLAN\` |"
+            echo "| fail-on | \`$FAIL_ON\` |"
+            echo "| format | \`$FORMAT\` |"
+            echo "| exit code | \`$code\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ -n "$sarif" ]; then
+          echo "SARIF written to $sarif"
+        fi
+        exit 0
+
+    - id: result
+      name: Interpret the exit code
+      shell: bash
+      env:
+        CODE: ${{ steps.run.outputs.exit-code }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        set -euo pipefail
+
+        # 0 / 1 / 2 are a documented CI contract. The step fails on 1 and 2
+        # because both mean "do not merge this yet", but they mean different
+        # things — 1 is a real finding, 2 is preflight being unable to answer —
+        # and collapsing them would hide an outage behind what looks like a
+        # permission gap. The distinction stays readable in the `exit-code`
+        # output and is named here in the log.
+        case "$CODE" in
+          0)
+            echo "preflight: nothing at or above the '${FAIL_ON}' threshold"
+            ;;
+          1)
+            echo "::error title=preflight::findings tripped the '${FAIL_ON}' threshold (exit 1) — the identity is missing permissions this plan needs"
+            exit 1
+            ;;
+          2)
+            echo "::error title=preflight::preflight could not complete the check (exit 2) — usage error, missing credentials, or an AWS call that failed. This is not a permission finding."
+            exit 1
+            ;;
+          *)
+            echo "::error title=preflight::unexpected exit code '${CODE}'"
+            exit 1
+            ;;
+        esac
