@@ -3,12 +3,18 @@
 Catch IAM permission gaps between a Terraform plan and the identity that will
 apply it — before merge, without touching a single real resource.
 
-> **Status: works end to end, first release pending.** Checks run against real
-> AWS and produce real findings, including SARIF annotations for pull requests.
-> The mapping database is still small and most entries are `draft`, so coverage
-> is narrow and most results cap at `Likely`. The release pipeline and the
-> GitHub Action are built, but no version has been tagged yet — until `v0.1.0`
-> exists, `go install` is the only way in. See [Roadmap](#roadmap).
+> **Status: v0.1.0, early.** Checks run against real AWS and produce real
+> findings, including SARIF annotations on pull requests. Binaries and the
+> GitHub Action are published.
+>
+> **The honest limitation is coverage, not machinery.** The mapping database
+> holds 25 resource types across seven services, and most operations are
+> `draft` — meaning the action list was written from working knowledge rather
+> than proven against a real apply. A `draft` operation caps its findings at
+> `Likely` and says so. Point this at a large plan today and a good deal of it
+> will come back `Unchecked`, which is the correct answer to a question we
+> cannot yet answer, and is reported rather than hidden. See
+> [Coverage](#coverage).
 
 ## The problem
 
