@@ -40,12 +40,27 @@ testfixtures/aws/fixtures.json
 credentials
 .claude
 
-# Documentation is kept out of the repository on purpose. The strategy and
-# design documents (GENERAL_DIRECTION.md, SPECS.md, docs/) are working material,
-# not deliverables, and they live on the author's machine only. README.md is the
-# single exception because it is the repository's public face.
+# Documentation.
+#
+# The engineering documents SHIP, as of 2026-09-25. They were excluded while
+# this was a private scratchpad, which meant a clone carried no CLAUDE.md, no
+# schema reference and no contributor guide — fine for one machine, wrong for a
+# codebase other people and other agents are meant to maintain. The mapping
+# database is explicitly a community asset (SPECS §8); a contributor cannot
+# promote an entry without the standard that says how.
+#
+# GENERAL_DIRECTION.md stays out. It is strategy, business model, competitive
+# positioning and exit context — working material for the founders, not part of
+# the product.
 *.md
 !/README.md
+!/CLAUDE.md
+!/CONTRIBUTING.md
+!/SPECS.md
+!docs/**/*.md
+!mappings/**/*.md
+!testfixtures/**/*.md
+!derivefixtures/**/*.md
 
 # Test fixtures are checked in on purpose
 !**/testdata/**
