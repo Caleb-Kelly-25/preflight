@@ -5,7 +5,6 @@ package report
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -47,6 +46,24 @@ type WriteOptions struct {
 	// raw decision. It is the only mitigation available for the SCP diagnostic
 	// blind spot, where AWS deliberately withholds why an SCP denied.
 	Explain bool
+
+	// Locations resolves a resource address to a source position, for SARIF.
+	// The other formats ignore it.
+	//
+	// nil is a supported state, not an error: WriteSARIF then drops every
+	// result and says so, loudly, rather than emitting location-less results
+	// GitHub would accept and then fail to place.
+	Locations SourceIndex
+
+	// ToolVersion is reported as the SARIF driver's semanticVersion. GitHub
+	// groups analyses by it, so a released binary should set it.
+	ToolVersion string
+
+	// Warn receives degradation notices that belong on the terminal rather than
+	// in the report — SARIF results dropped for want of a location, above all.
+	// A machine-readable report goes to stdout and must stay parseable, so the
+	// human-facing half of the message needs a separate channel. May be nil.
+	Warn func(string)
 }
 
 // Write renders the report in the requested format.
@@ -55,7 +72,7 @@ func Write(w io.Writer, r *finding.Report, f Format, opts WriteOptions) error {
 	case FormatJSON:
 		return WriteJSON(w, r)
 	case FormatSARIF:
-		return WriteSARIF(w, r)
+		return WriteSARIF(w, r, opts)
 	default:
 		return WriteText(w, r, opts)
 	}
@@ -71,23 +88,6 @@ func WriteJSON(w io.Writer, r *finding.Report) error {
 		*finding.Report
 		Summary finding.Counts `json:"summary"`
 	}{SchemaVersion: SchemaVersion, Report: r, Summary: r.Counts()})
-}
-
-// ErrSARIFUnimplemented is returned by WriteSARIF until source-location
-// resolution exists.
-//
-// SARIF is only useful to GitHub if each result carries a file and line, and
-// Terraform's plan JSON carries no source locations at all — it identifies
-// resources by address ("aws_s3_bucket.logs"), not by position. Emitting SARIF
-// without locations would produce annotations GitHub cannot place inline, which
-// is worse than emitting nothing. Closing this needs an HCL pass over the
-// configuration to map address to file:line. Design: docs/DESIGN.md §10.3.
-var ErrSARIFUnimplemented = errors.New(
-	"sarif output is not implemented yet: it requires mapping resource addresses to source file and line, which the plan JSON does not provide")
-
-// WriteSARIF is not yet implemented; see ErrSARIFUnimplemented.
-func WriteSARIF(io.Writer, *finding.Report) error {
-	return ErrSARIFUnimplemented
 }
 
 // WriteText renders the human-readable report, grouped by confidence level so

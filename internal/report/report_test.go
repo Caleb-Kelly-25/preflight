@@ -2,7 +2,9 @@ package report_test
 
 import (
 	"encoding/json"
-	"errors"
+	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,8 +68,64 @@ func sample() *finding.Report {
 				Level:           finding.LevelUnchecked,
 				Reasons:         []finding.Reason{finding.ReasonNoMapping},
 			},
+			{
+				ResourceAddress: "aws_iam_role.clean",
+				ResourceType:    "aws_iam_role",
+				Operation:       "create",
+				Level:           finding.LevelVerified,
+				SimulatedARN:    "arn:aws:iam::123456789012:role/clean",
+				Actions: []finding.ActionResult{
+					{Action: "iam:CreateRole", ResourceARN: "arn:aws:iam::123456789012:role/clean", Decision: finding.DecisionAllowed},
+				},
+			},
 		},
 	}
+}
+
+// golden compares against a checked-in file, or rewrites it under -update.
+//
+// The three output formats are contracts with three different readers — a
+// human, a dashboard, and GitHub — and a diff against a golden file is the only
+// review that shows all of what changed rather than what a test happened to
+// assert. DESIGN §13.
+func golden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	// Rendered output is compared line-wise, so a checkout that normalised line
+	// endings must not read as a failure.
+	got = strings.ReplaceAll(got, "\r\n", "\n")
+
+	if *update {
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatalf("updating golden %s: %v", path, err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading golden %s: %v (run go test ./internal/report -update)", path, err)
+	}
+	if got != strings.ReplaceAll(string(want), "\r\n", "\n") {
+		t.Errorf("%s does not match the golden file; run go test ./internal/report -update to see the diff\n--- got ---\n%s", name, got)
+	}
+}
+
+var update = flag.Bool("update", false, "rewrite the golden files in testdata")
+
+func TestTextGolden(t *testing.T) {
+	golden(t, "report.txt", renderText(t, sample(), report.WriteOptions{}))
+}
+
+func TestTextExplainGolden(t *testing.T) {
+	golden(t, "report-explain.txt", renderText(t, sample(), report.WriteOptions{Explain: true}))
+}
+
+func TestJSONGolden(t *testing.T) {
+	var b strings.Builder
+	if err := report.WriteJSON(&b, sample()); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	golden(t, "report.json", b.String())
 }
 
 func renderText(t *testing.T, r *finding.Report, opts report.WriteOptions) string {
@@ -174,14 +232,6 @@ func TestJSONSchemaVersion(t *testing.T) {
 	// what AWS actually said.
 	if doc.Findings[1].Actions[0].Decision != "implicitDeny" || !doc.Findings[1].Actions[0].Inconclusive {
 		t.Errorf("suppressed denial lost its raw decision: %+v", doc.Findings[1].Actions[0])
-	}
-}
-
-func TestSARIFStillReportsWhyItIsUnimplemented(t *testing.T) {
-	var b strings.Builder
-	err := report.Write(&b, sample(), report.FormatSARIF, report.WriteOptions{})
-	if !errors.Is(err, report.ErrSARIFUnimplemented) {
-		t.Errorf("err = %v, want ErrSARIFUnimplemented", err)
 	}
 }
 

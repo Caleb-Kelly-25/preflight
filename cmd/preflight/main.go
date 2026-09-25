@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/Caleb-Kelly-25/preflight/internal/engine"
 	"github.com/Caleb-Kelly-25/preflight/internal/finding"
+	"github.com/Caleb-Kelly-25/preflight/internal/hclsrc"
 	"github.com/Caleb-Kelly-25/preflight/internal/mapping"
 	"github.com/Caleb-Kelly-25/preflight/internal/plan"
 	"github.com/Caleb-Kelly-25/preflight/internal/principal"
@@ -133,6 +135,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	var (
 		planPath     = fs.String("plan", "", "path to `terraform show -json` output, or - for stdin (required)")
 		format       = fs.String("format", "text", "output format: text, json, or sarif")
+		configDir    = fs.String("config-dir", "", "directory holding the .tf files, for SARIF source locations; defaults to the plan file's directory")
 		failOn       = fs.String("fail-on", "denied", "exit non-zero on: denied, likely, or unchecked")
 		region       = fs.String("region", "", "AWS region; defaults to the plan's provider config, then the environment")
 		principalARN = fs.String("principal", "", "caller ARN to check; defaults to the current identity via sts:GetCallerIdentity")
@@ -206,11 +209,21 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 
-	if err := report.Write(stdout, rep, outFormat, report.WriteOptions{Explain: *explain}); err != nil {
-		if errors.Is(err, report.ErrSARIFUnimplemented) {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return exitError
+	writeOpts := report.WriteOptions{
+		Explain:     *explain,
+		ToolVersion: versionString(),
+		Warn:        func(s string) { fmt.Fprintf(stderr, "warning: %s\n", s) },
+	}
+	// Only SARIF needs source positions, and building them means parsing every
+	// .tf file in the configuration. There is no reason to pay for that, or to
+	// risk its warnings, when rendering text or JSON.
+	if outFormat == report.FormatSARIF {
+		if ix := loadSourceIndex(*configDir, *planPath, stderr); ix != nil {
+			writeOpts.Locations = ix
 		}
+	}
+
+	if err := report.Write(stdout, rep, outFormat, writeOpts); err != nil {
 		fmt.Fprintf(stderr, "error: writing report: %v\n", err)
 		return exitError
 	}
@@ -329,6 +342,62 @@ func resolveRegion(flagValue string, p *plan.Plan) string {
 		}
 	}
 	return ""
+}
+
+// loadSourceIndex builds the address -> file:line index SARIF needs.
+//
+// It returns a concrete *hclsrc.Index rather than the interface on purpose: a
+// nil pointer stored in an interface is not a nil interface, and that
+// distinction is what tells WriteSARIF whether it has locations at all.
+//
+// A configuration it cannot read is not fatal. The findings are still correct
+// and still worth producing; WriteSARIF states plainly that it could not place
+// them, which is better than refusing to run over a flag nobody needed before
+// today.
+func loadSourceIndex(configDir, planPath string, stderr io.Writer) *hclsrc.Index {
+	dir := resolveConfigDir(configDir, planPath)
+
+	// An absolute URI cannot be matched to a file in a pull request, so the
+	// annotations would be accepted and then go nowhere. Say so rather than let
+	// it look like the tool found nothing.
+	if filepath.IsAbs(dir) {
+		fmt.Fprintf(stderr, "warning: --config-dir %s is absolute; SARIF paths will be relative to it,"+
+			" which GitHub can only place if it is the repository root\n", dir)
+	}
+
+	ix, err := hclsrc.Load(dir)
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: %v\n", err)
+		return nil
+	}
+	for _, warn := range ix.Warnings() {
+		fmt.Fprintf(stderr, "warning: %s\n", warn)
+	}
+	if ix.Len() == 0 {
+		fmt.Fprintf(stderr, "warning: no terraform resource blocks found under %s\n", dir)
+		return nil
+	}
+	return ix
+}
+
+// resolveConfigDir picks the directory holding the .tf files.
+//
+// The plan file's own directory is the default because `terraform plan -out` is
+// normally run from the configuration root, so plan.json usually sits beside
+// main.tf. A relative path is deliberately left relative: SARIF artifact URIs
+// have to be relative to the repository root for GitHub to place an annotation,
+// and a runner's absolute path is not.
+func resolveConfigDir(flagValue, planPath string) string {
+	if d := strings.TrimSpace(flagValue); d != "" {
+		return d
+	}
+	if planPath == "" || planPath == "-" {
+		return "."
+	}
+	if d := filepath.Dir(planPath); d != "" {
+		return d
+	}
+	return "."
 }
 
 func openPlan(path string) (io.Reader, func(), error) {

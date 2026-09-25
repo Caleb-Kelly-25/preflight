@@ -4,10 +4,10 @@ Catch IAM permission gaps between a Terraform plan and the identity that will
 apply it — before merge, without touching a single real resource.
 
 > **Status: works end to end, not yet released.** Checks run against real AWS
-> and produce real findings. The mapping database is still small and only one
-> entry of ten is `verified`, so coverage is narrow and most results cap at
-> `Likely`. SARIF output and the GitHub Action are not built yet. See
-> [Roadmap](#roadmap).
+> and produce real findings, including SARIF annotations for pull requests. The
+> mapping database is still small and most entries are `draft`, so coverage is
+> narrow and most results cap at `Likely`. The GitHub Action and released
+> binaries are not built yet. See [Roadmap](#roadmap).
 
 ## The problem
 
@@ -75,6 +75,7 @@ preflight version
 | `--plan` | *(required)* | `terraform show -json` output, or `-` for stdin |
 | `--principal` | *(current identity)* | caller ARN to check; see below |
 | `--format` | `text` | `text`, `json`, or `sarif` |
+| `--config-dir` | *(the plan file's directory)* | where the `.tf` files are; SARIF only |
 | `--fail-on` | `denied` | `denied`, `likely`, or `unchecked` |
 | `--region` | *(plan, then environment)* | used to build resource ARNs |
 | `--context` | | supply a condition key, repeatable: `--context aws:SourceIp@ip=10.0.0.1` |
@@ -102,6 +103,37 @@ preflight check --plan plan.json --principal arn:aws:iam::123456789012:role/depl
 | 0 | nothing above the `--fail-on` threshold |
 | 1 | findings tripped the threshold |
 | 2 | usage error or the tool could not run |
+
+### SARIF output
+
+`--format sarif` produces SARIF 2.1.0 for GitHub code scanning, which renders
+each finding as an inline annotation on the pull request.
+
+```
+preflight check --plan plan.json --format sarif --config-dir . > preflight.sarif
+```
+
+GitHub can only place an annotation that names a file and a line, and the plan
+JSON contains neither — it identifies resources by address. preflight therefore
+parses the Terraform configuration to find where each resource is declared.
+`--config-dir` says where those `.tf` files are, defaulting to the plan file's
+directory. Give it a path **relative to the repository root**; an absolute path
+from a CI runner is not something GitHub can match to a file in a diff.
+
+Local modules are followed, and `count` / `for_each` instances all map back to
+the block that declared them. Registry and git modules are not followed: their
+code lives under `.terraform/`, which is not in version control, so GitHub could
+not place an annotation there anyway.
+
+A finding whose resource cannot be located is **left out of the report rather
+than emitted without a location**, because GitHub accepts a location-less result
+and then silently fails to place it, which makes the feature look broken instead
+of absent. Every omission is reported three ways — a warning on stderr, an error
+notification inside the SARIF, and `executionSuccessful: false` — because a SARIF
+run with no results otherwise reads as a clean bill of health.
+
+Verified findings produce no annotation. SARIF results are problems, and burying
+the real ones under a wall of green is how a check stops being read.
 
 ### Required AWS permissions
 
@@ -146,23 +178,33 @@ Most CI roles do not have these today.
 
 ## Coverage
 
-`preflight mappings list` prints what is currently mapped. **One entry of ten is
-`verified`; the other nine are `draft`** — written from working knowledge and not
-proven complete. A `draft` entry caps every finding it produces at `Likely`. Do
-not rely on those action lists.
+`preflight mappings list` prints what is currently mapped, and marks each
+operation that has been proven. Most are still `draft` — written from working
+knowledge and not proven complete. **A `draft` operation caps every finding it
+produces at `Likely`.** Do not rely on those action lists.
 
 Verification takes two things, because a correct-looking list can still be
 incomplete, and it is incompleteness that produces a false "allowed":
 
-1. Every action name checked against AWS's own policy validator.
+1. Every action name checked against AWS's own policy validator. (Names only —
+   it does **not** check that an action can apply to the ARN it is scoped to.)
 2. Empirical proof the list is *sufficient* — grant a role exactly the mapped
-   actions, run a real apply, then remove one action and confirm it fails.
+   actions, run a real apply, then remove each one and confirm it fails.
 
-That second step is why only one entry is verified. When `aws_s3_bucket` went
-through it, the mapping turned out to be **wrong by 14 actions**: a bucket
-create needs 17, not the 3 originally listed, because Terraform reads every
-resource back after writing it. Assume the nine remaining entries are wrong in
-the same direction until measured.
+That second step is the expensive one, and every entry put through it so far
+was wrong:
+
+| Entry | Claimed | Measured |
+|---|---|---|
+| `aws_s3_bucket` | 3 actions | **17** — Terraform reads each resource back after writing it |
+| `aws_iam_role` | missing 5 | including `iam:TagRole`, authorized with no API call ever made |
+| `aws_iam_instance_profile` | 5 actions | plus `iam:PassRole` on the *role*, which AWS's docs misdirect you about |
+| `aws_vpc` | one surplus | `ec2:DescribeTags` was never needed |
+| `aws_security_group` | two surplus | `ec2:DescribeTags` again, plus `DescribeSecurityGroupRules` |
+
+Assume any unmeasured entry is wrong in the same way. Over-reporting is the
+safe direction; under-reporting produces the false "allowed" this tool exists to
+prevent.
 
 Coverage is free and always will be. The project never gates *whether*
 something gets checked behind payment — only, eventually, how deeply.
@@ -187,8 +229,7 @@ Near-term, in order:
 3. Broaden the mapping database: EC2, RDS, Lambda, VPC, ECS.
 4. Conditional actions and cross-resource requirements (`iam:PassRole`) in the
    mapping schema.
-5. SARIF output, which needs HCL source-location mapping.
-6. GitHub Action wrapper and released binaries.
+5. GitHub Action wrapper and released binaries.
 
 ## Contributing
 

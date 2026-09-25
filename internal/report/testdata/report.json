@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0",
+  "principal_arn": "arn:aws:iam::123456789012:role/deploy",
+  "account_id": "123456789012",
+  "findings": [
+    {
+      "resource_address": "aws_s3_bucket.denied",
+      "resource_type": "aws_s3_bucket",
+      "operation": "create",
+      "level": "likely",
+      "reasons": [
+        "resource_policy_not_evaluated"
+      ],
+      "actions": [
+        {
+          "action": "s3:CreateBucket",
+          "resource_arn": "arn:aws:s3:::denied",
+          "decision": "implicitDeny"
+        }
+      ],
+      "simulated_arn": "arn:aws:s3:::denied"
+    },
+    {
+      "resource_address": "aws_s3_bucket.wildcard",
+      "resource_type": "aws_s3_bucket",
+      "operation": "create",
+      "level": "unchecked",
+      "reasons": [
+        "arn_not_resolvable"
+      ],
+      "actions": [
+        {
+          "action": "s3:CreateBucket",
+          "resource_arn": "*",
+          "decision": "implicitDeny",
+          "inconclusive": true,
+          "inconclusive_reason": "arn_not_resolvable"
+        }
+      ],
+      "simulated_arn": "*"
+    },
+    {
+      "resource_address": "aws_iam_role.gated",
+      "resource_type": "aws_iam_role",
+      "operation": "create",
+      "level": "likely",
+      "reasons": [
+        "condition_keys_not_supplied"
+      ],
+      "actions": [
+        {
+          "action": "iam:CreateRole",
+          "resource_arn": "arn:aws:iam::1:role/g",
+          "decision": "allowed"
+        }
+      ],
+      "unsupplied_context_keys": [
+        "aws:SourceIp"
+      ],
+      "supplied_context": [
+        {
+          "key": "aws:RequestedRegion",
+          "type": "string",
+          "values": [
+            "us-east-1"
+          ]
+        }
+      ]
+    },
+    {
+      "resource_address": "aws_dynamodb_table.unmapped",
+      "resource_type": "aws_dynamodb_table",
+      "operation": "update",
+      "level": "unchecked",
+      "reasons": [
+        "resource_type_not_mapped"
+      ],
+      "actions": null
+    },
+    {
+      "resource_address": "aws_iam_role.clean",
+      "resource_type": "aws_iam_role",
+      "operation": "create",
+      "level": "verified",
+      "actions": [
+        {
+          "action": "iam:CreateRole",
+          "resource_arn": "arn:aws:iam::123456789012:role/clean",
+          "decision": "allowed"
+        }
+      ],
+      "simulated_arn": "arn:aws:iam::123456789012:role/clean"
+    }
+  ],
+  "warnings": [
+    "one batch was throttled"
+  ],
+  "summary": {
+    "verified": 1,
+    "likely": 2,
+    "unchecked": 2,
+    "denied": 1
+  }
+}

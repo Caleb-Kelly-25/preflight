@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "preflight",
+          "informationUri": "https://github.com/Caleb-Kelly-25/preflight",
+          "semanticVersion": "1.2.3",
+          "rules": [
+            {
+              "id": "preflight/missing-permission",
+              "name": "MissingPermission",
+              "shortDescription": {
+                "text": "The deploy identity lacks an IAM permission this change requires"
+              },
+              "fullDescription": {
+                "text": "iam:SimulatePrincipalPolicy returned a conclusive denial for an action this resource change requires. terraform apply will fail."
+              },
+              "help": {
+                "text": "Grant the named actions to the identity running terraform apply.",
+                "markdown": "Grant the named actions to the identity running `terraform apply`.\n\nThis denial is conclusive: the action was simulated against a resolvable ARN, and denials that could be an artefact of how the question had to be asked are reported as `preflight/unchecked` instead."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              }
+            },
+            {
+              "id": "preflight/unchecked",
+              "name": "UncheckedResource",
+              "shortDescription": {
+                "text": "This change was not checked and must not be read as safe"
+              },
+              "fullDescription": {
+                "text": "No meaningful permission check was performed — most often because the resource type is not in the mapping database, or the resource ARN is not knowable until apply."
+              },
+              "help": {
+                "text": "Unchecked is not a pass. Treat this resource as unverified.",
+                "markdown": "**Unchecked is not a pass.** preflight could not evaluate this change, so it carries no information about whether the apply will succeed.\n\nThe usual fix is a mapping entry for the resource type; contributions are the highest-value work on the project."
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              }
+            },
+            {
+              "id": "preflight/not-verified",
+              "name": "NotFullyVerified",
+              "shortDescription": {
+                "text": "Allowed by the identity policy, but something that could still deny was not evaluated"
+              },
+              "fullDescription": {
+                "text": "The simulation passed against the identity policy and any in-scope SCPs, but a resource-based policy, an RCP, an unsupplied condition key, or an unverified mapping entry could still deny this at apply time."
+              },
+              "help": {
+                "text": "Informational. The check passed as far as it could be taken.",
+                "markdown": "Informational. The identity policy allows the required actions, but preflight could not rule out everything that denies at apply time. The message names which of those applies here."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "preflight/not-verified",
+          "ruleIndex": 2,
+          "level": "note",
+          "message": {
+            "text": "aws_iam_role.gated (create): the identity policy allows the required actions, but this was not fully verified. Reason: policy conditions not evaluated: aws:SourceIp."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "main.tf"
+                },
+                "region": {
+                  "startLine": 14
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "preflightResourceOperation/v1": "aws_iam_role.gated#create"
+          }
+        },
+        {
+          "ruleId": "preflight/missing-permission",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "aws_s3_bucket.denied (create): terraform apply will fail. The deploy identity is missing s3:CreateBucket. Reason: resource policy not evaluated."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "main.tf"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "preflightResourceOperation/v1": "aws_s3_bucket.denied#create"
+          }
+        },
+        {
+          "ruleId": "preflight/unchecked",
+          "ruleIndex": 1,
+          "level": "warning",
+          "message": {
+            "text": "aws_s3_bucket.wildcard (create): not checked, so this must not be read as safe. Reason: exact ARN unknown until apply, so denials are inconclusive. AWS denied 1 action(s), but the question could not be asked precisely enough to act on that; run preflight with --explain to see them."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "main.tf"
+                },
+                "region": {
+                  "startLine": 9
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "preflightResourceOperation/v1": "aws_s3_bucket.wildcard#create"
+          }
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": false,
+          "toolExecutionNotifications": [
+            {
+              "level": "warning",
+              "message": {
+                "text": "one batch was throttled"
+              }
+            },
+            {
+              "level": "error",
+              "message": {
+                "text": "1 finding(s) were omitted from this SARIF report because their source location could not be determined, so they are NOT represented here and this run must not be read as clean: aws_dynamodb_table.unmapped (update). These addresses were not found in the indexed configuration — check that --config-dir matches the configuration the plan was produced from, and note that resources inside registry or git modules cannot be located."
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

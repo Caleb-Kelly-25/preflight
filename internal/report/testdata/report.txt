@@ -1,0 +1,34 @@
+preflight — IAM permission check
+principal: arn:aws:iam::123456789012:role/deploy
+
+  ! one batch was throttled
+
+MISSING PERMISSIONS (1)
+This plan will fail at apply time.
+
+  aws_s3_bucket.denied  create  resource policy not evaluated
+                                  missing: s3:CreateBucket
+
+VERIFIED (1)
+  Simulated against the identity policy with nothing left unevaluated.
+
+  aws_iam_role.clean  create  
+
+LIKELY (1)
+  Identity policy allows these, but something that could still deny was not checked.
+
+  aws_iam_role.gated  create  policy conditions not evaluated: aws:SourceIp
+
+UNCHECKED (2)
+  Not checked. Do not read these as safe.
+
+  aws_dynamodb_table.unmapped  update  resource type not in mapping database
+  aws_s3_bucket.wildcard       create  exact ARN unknown until apply, so denials are inconclusive
+
+NOTE: 1 denial(s) were not reported as missing permissions.
+  AWS returned a denial, but the question we asked could not distinguish a real
+  gap from an artefact of how we had to ask it — an unresolvable ARN, or a
+  condition key we could not supply. Those findings are Unchecked, not passing.
+  Run with --explain to see each one.
+
+summary: 1 verified, 2 likely, 2 unchecked, 1 with missing permissions
