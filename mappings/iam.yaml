@@ -175,10 +175,16 @@ resources:
   - type: aws_iam_role_policy
     service: iam
     status: draft
+    # Create derived by the harness 2026-09-25; update and delete were not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
     arn_attributes:
       RoleName: role
+    # DERIVED 2026-09-25, and missing before: the entry declared no read_actions,
+    # which is now four for four as a predictor of under-reporting.
+    read_actions:
+      - iam:GetRolePolicy
     operations:
       create:
         - iam:PutRolePolicy
@@ -186,6 +192,21 @@ resources:
         - iam:PutRolePolicy
       delete:
         - iam:DeleteRolePolicy
+    notes: >-
+      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
+      sufficiency proven, minimality proven. A role holding exactly
+      iam:PutRolePolicy and iam:GetRolePolicy attaches an inline policy, and
+      removing either fails.
+
+      The entry claimed only iam:PutRolePolicy and was wrong in the dangerous
+      direction. Every entry so far with an empty read set has been.
+
+      The fixture (derivefixtures/aws_iam_role_policy) does NOT create the role
+      it attaches to. That is deliberate: a fixture that created its own role
+      would need iam:CreateRole and friends, and the derivation would attribute
+      those to this resource type. The role is a support resource created out of
+      band, which makes the fixture non-self-contained — the right trade, because
+      a derived set only means anything if exactly one resource type is in play.
 
   - type: aws_iam_instance_profile
     service: iam
