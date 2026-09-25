@@ -171,8 +171,21 @@ resources:
     service: ecs
     status: draft
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html
-    # DELIBERATELY NO arn_format. See notes — the service ARN needs the cluster
-    # NAME, and the `cluster` attribute may hold either a name or an ARN.
+    # The long ARN format, which has been mandatory since 2021: the service ARN
+    # embeds the CLUSTER NAME as well as the service name.
+    #
+    # `cluster` may hold either a bare cluster name or a full cluster ARN
+    # (`cluster = aws_ecs_cluster.x.id` is an ARN and is at least as common as
+    # the name form), which is what arn_or_name exists for. When it holds an
+    # ARN, the cluster's own region and account are used to build the service
+    # ARN rather than the caller's — an ECS service lives where its cluster
+    # lives, and the two are not always the same place.
+    arn_format: "arn:${Partition}:ecs:${Region}:${Account}:service/${ClusterName}/${ServiceName}"
+    arn_attributes:
+      ClusterName: cluster
+      ServiceName: name
+    arn_or_name:
+      ClusterName: { service: ecs, resource_type: cluster }
     context_keys:
       "aws:RequestTag/*":
         from: tags
@@ -200,30 +213,51 @@ resources:
         - ecs:UpdateService
 
     # `iam_role` is the legacy Classic-Load-Balancer path, used only when the
-    # task definition is not awsvpc. The provider documents it as an ARN, so no
-    # arn_format. The ECS API also accepts a bare name there; a configuration
-    # passing a name would resolve to a non-ARN string and the check would be
-    # wrong — recorded rather than guessed around.
+    # task definition is not awsvpc. The provider documents it as an ARN, but
+    # the ECS API accepts a bare name there too — which used to mean a
+    # configuration passing a name simulated iam:PassRole against a bare string
+    # that is not an ARN at all, and did so with full confidence. arn_or_name
+    # fixes that: the ARN spelling is used as written, the name spelling is
+    # templated, and a value that is neither degrades to "*".
     #
     # Create only: UpdateService does not take a role.
     references:
       - action: iam:PassRole
         arn_from: iam_role
+        arn_format: "arn:${Partition}:iam::${Account}:role/${Name}"
+        arn_or_name: { service: iam, resource_type: role }
         operations: [create]
         when: { attribute_set: iam_role }
 
     notes: >-
       DRAFT. Names checked 2026-09-25; completeness unestablished.
 
-      NO arn_format ON PURPOSE. An ECS service ARN is
+      ARN SCOPING REGAINED 2026-09-25, AND IT IS REASONED RATHER THAN MEASURED.
+      This entry previously carried no arn_format and simulated against "*" on
+      every operation. An ECS service ARN is
       arn:...:service/<cluster-name>/<service-name>, so building it needs the
       cluster NAME — but the `cluster` attribute holds either a bare name or a
       full cluster ARN, and `cluster = aws_ecs_cluster.x.id` (an ARN) is at
-      least as common as the name form. Templating unconditionally would embed
-      an ARN inside an ARN for the common case: a confident wrong answer that
-      matches no real policy. Leaving it out degrades to "*" with a visible
-      arn_not_resolvable caveat. Same trade as aws_lambda_permission, same fix
-      needed in the schema.
+      least as common as the name form. Templating unconditionally would have
+      embedded an ARN inside an ARN for the common case.
+
+      `arn_or_name` now inspects the value first, so both spellings build the
+      same service ARN and anything that is neither degrades to "*" with the
+      arn_not_resolvable caveat, exactly as before. Nothing here can present as
+      checked when it is not.
+
+      Three things about it are reasoned, not measured. (1) The ARN shape comes
+      from the service authorization reference, and the caveat at the top of
+      this file applies — ValidatePolicy does not check action/resource
+      compatibility, so a wrong shape fails as a false positive rather than
+      loudly. (2) The LONG ARN format is assumed. An account still emitting
+      short service ARNs (arn:...:service/<service-name>, no cluster segment)
+      would not match the ARN built here; AWS made the long format mandatory in
+      2021, so this is safe for any account created since. (3) `cluster` is
+      optional in the provider and defaults to the cluster named `default`;
+      when it is omitted entirely the ARN degrades to "*" rather than assuming
+      that default, because assuming it would be a guess about which cluster the
+      service belongs to.
 
       This entry does NOT list iam:PassRole for the task definition's execution
       or task roles, and that is deliberate — those are passed at

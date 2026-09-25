@@ -114,6 +114,59 @@ resources:
     source: https://example.invalid/x
     verified_operations: [create]
     operations: {create: [s3:CreateBucket]}`,
+		// arn_or_name decides whether a value is safe to template. A
+		// declaration missing either half cannot tell `role/x` from `user/x`,
+		// or a lambda ARN from an S3 one, so it would admit exactly the
+		// confidently-wrong ARN it exists to exclude.
+		"arn_or_name without service": `
+resources:
+  - type: aws_thing
+    service: lambda
+    status: draft
+    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:function:${Name}"
+    arn_attributes: {Name: function_name}
+    arn_or_name: {Name: {resource_type: function}}
+    operations: {create: [lambda:AddPermission]}`,
+		"arn_or_name without resource_type": `
+resources:
+  - type: aws_thing
+    service: lambda
+    status: draft
+    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:function:${Name}"
+    arn_attributes: {Name: function_name}
+    arn_or_name: {Name: {service: lambda}}
+    operations: {create: [lambda:AddPermission]}`,
+		// Keyed to a variable that does not exist, it would silently never run
+		// and the polymorphic value would be templated unchecked.
+		"arn_or_name names an unused variable": `
+resources:
+  - type: aws_thing
+    service: lambda
+    status: draft
+    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:function:${Name}"
+    arn_attributes: {Name: function_name}
+    arn_or_name: {Other: {service: lambda, resource_type: function}}
+    operations: {create: [lambda:AddPermission]}`,
+		"arn_or_name with no attribute to read": `
+resources:
+  - type: aws_thing
+    service: lambda
+    status: draft
+    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:function:${Name}"
+    arn_prefix_attributes: {Name: name_prefix}
+    arn_or_name: {Name: {service: lambda, resource_type: function}}
+    operations: {create: [lambda:AddPermission]}`,
+		// Without a template there is nothing to build from the bare-name half.
+		"reference arn_or_name without arn_format": `
+resources:
+  - type: aws_thing
+    service: lambda
+    status: draft
+    references:
+      - action: iam:PassRole
+        arn_from: role
+        arn_or_name: {service: iam, resource_type: role}
+    operations: {create: [lambda:CreateFunction]}`,
 		// Claiming an unmapped operation is proven is a claim about nothing.
 		"verified_operations names an unmapped operation": `
 resources:
@@ -204,5 +257,67 @@ func TestShippedDatabase(t *testing.T) {
 				t.Errorf("%s: context key %q has no source attribute", typ, key)
 			}
 		}
+	}
+}
+
+// TestShippedPolymorphicARNs pins the two entries that lost ARN scoping to the
+// name-or-ARN ambiguity and got it back through `arn_or_name`.
+//
+// Both spellings have to land on the same ARN. If they do not, the check a
+// user gets depends on how their configuration happened to be written, which is
+// worse than the wildcard these entries used to fall back to.
+func TestShippedPolymorphicARNs(t *testing.T) {
+	db, err := mapping.Load(mappings.FS)
+	if err != nil {
+		t.Fatalf("the shipped mapping database does not load: %v", err)
+	}
+	ctx := mapping.ARNContext{Partition: "aws", Account: "123456789012", Region: "us-east-1"}
+
+	tests := []struct {
+		typ   string
+		attrs []map[string]any
+		want  string
+	}{
+		{
+			typ: "aws_lambda_permission",
+			attrs: []map[string]any{
+				{"function_name": "my-function"},
+				{"function_name": "arn:aws:lambda:us-east-1:123456789012:function:my-function"},
+			},
+			want: "arn:aws:lambda:us-east-1:123456789012:function:my-function",
+		},
+		{
+			typ: "aws_ecs_service",
+			attrs: []map[string]any{
+				{"cluster": "prod", "name": "api"},
+				{"cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/prod", "name": "api"},
+			},
+			want: "arn:aws:ecs:us-east-1:123456789012:service/prod/api",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.typ, func(t *testing.T) {
+			r, ok := db.Lookup(tc.typ)
+			if !ok {
+				t.Fatalf("%s is not in the shipped database", tc.typ)
+			}
+			for _, attrs := range tc.attrs {
+				got, exact := r.BuildARN(ctx, attrs, nil)
+				if !exact {
+					t.Errorf("%v: exact = false, want true", attrs)
+				}
+				if got != tc.want {
+					t.Errorf("%v: got %q, want %q", attrs, got, tc.want)
+				}
+			}
+
+			// And the safety half: a value that is neither spelling must not be
+			// templated into a confident wrong ARN.
+			bad := map[string]any{"function_name": "123456789012:function:f", "cluster": "some:thing", "name": "api"}
+			if got, exact := r.BuildARN(ctx, bad, nil); exact || got != "*" {
+				t.Errorf("unidentifiable value: got (%q, %v), want (%q, false)", got, exact, "*")
+			}
+		})
 	}
 }

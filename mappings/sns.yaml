@@ -1,0 +1,393 @@
+# Amazon SNS
+#
+# VERIFICATION STATUS — every entry in this file is `draft`. Nothing here has
+# been near a real apply; no topic was created to write it.
+#
+# Two dimensions must hold before an entry is `verified`; see README.md.
+#   1. Names            - action NAMES checked 2026-09-25 via
+#                         accessanalyzer:ValidatePolicy. All 11 sns actions used
+#                         below exist and are spelled correctly, as do
+#                         iam:PassRole in the references and the several
+#                         named-but-unmapped actions discussed in the notes.
+#                         Zero ERROR findings. (A deliberately planted
+#                         s3:PutBucketEncryption in the same document WAS
+#                         reported, so the validator was engaged.)
+#   2. Completeness     - NOT established. See the per-entry notes.
+#
+# ARNs. ValidatePolicy checks names only — measured 2026-09-25, it accepts
+# lambda:CreateFunction scoped to an S3 bucket ARN without complaint. So every
+# arn_format below was instead checked against the "Resource types" column of
+# the action table in the SNS page of the Service Authorization Reference, and
+# for this service that reading CHANGED the answer rather than confirming it:
+#
+#   - `topic` is the ONLY resource type SNS defines. There is no subscription
+#     resource type at all.
+#   - Subscribe, Unsubscribe, GetSubscriptionAttributes AND
+#     SetSubscriptionAttributes all authorize against `topic`.
+#
+# That is why aws_sns_topic_subscription below scopes to the TOPIC's ARN rather
+# than to the subscription ARN it owns. Scoping to the subscription ARN is the
+# intuitive choice and it would have been useless: no policy can name a resource
+# type that does not exist, so every simulation would have asked about an ARN
+# nothing grants. The topic ARN is documented as
+#
+#     arn:${Partition}:sns:${Region}:${Account}:${TopicName}
+#
+# which is what this file templates. A reading of a documentation table, not a
+# measurement.
+#
+# RCP STATUS, AND IT IS THE GOOD NEWS IN THIS FILE: `sns` is NOT in
+# internal/mapping's rcpServices. Unlike mappings/sqs.yaml and
+# mappings/dynamodb.yaml, findings here are not capped by a resource control
+# policy, so an entry promoted to `verified` would genuinely reach Verified —
+# for aws_sns_topic's create, at least; see the next paragraph. Empirical
+# derivation of this file is therefore worth more than it is for its two
+# siblings.
+#
+# RESOURCE POLICIES. An SNS topic carries an access policy of its own — the
+# `policy` attribute, written through SetTopicAttributes — and
+# SimulatePrincipalPolicy will not evaluate it for a role. Per-operation:
+#
+#   aws_sns_topic               [update, delete]         - a topic that does not
+#                                                          exist yet has no
+#                                                          policy to deny its own
+#                                                          creation, so create is
+#                                                          exempt and is the one
+#                                                          operation in this file
+#                                                          that can reach Verified
+#   aws_sns_topic_subscription  [create, update, delete]  - subscribing acts on a
+#                                                          topic that already
+#                                                          exists, and a topic
+#                                                          policy restricting
+#                                                          sns:Subscribe is one of
+#                                                          the commonest things a
+#                                                          topic policy does
+#   aws_sns_topic_policy        [create, update, delete]  - its create rewrites
+#                                                          the policy of an
+#                                                          existing topic, and the
+#                                                          CURRENT policy governs
+#                                                          that call
+#
+# Same distinction as aws_s3_bucket vs aws_s3_bucket_versioning, measured
+# 2026-09-01. Because there is no RCP cap here, under-claiming any of these
+# WOULD be observable: it would let a finding claim Verified while a topic
+# policy could still deny the call. That is the one unforgivable direction, so
+# they are claimed on the conservative side.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html
+
+resources:
+  - type: aws_sns_topic
+    service: sns
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html
+    # `name` is known at plan time when set explicitly, so a create resolves to a
+    # real ARN rather than degrading to "*". Like SQS and unlike most services,
+    # the ARN ends in the bare topic NAME with no path separator.
+    arn_format: "arn:${Partition}:sns:${Region}:${Account}:${TopicName}"
+    arn_attributes:
+      TopicName: name
+    arn_prefix_attributes:
+      TopicName: name_prefix
+    resource_policy_capable: [update, delete]
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    # REASONED, NOT MEASURED.
+    #
+    # sns:GetTopicAttributes is the only way to read a topic back — every
+    # configurable property of a topic except its tags is an entry in the
+    # attribute map it returns — so it is load-bearing on create, update and
+    # delete alike.
+    #
+    # sns:ListTagsForResource IS included, a deliberate departure from the
+    # aws_vpc / aws_security_group finding that a separate tag-read action was
+    # surplus both times. Those were surplus because an ec2 Describe response
+    # carries tags inline. GetTopicAttributes does NOT: the attribute map it
+    # returns has no tag member, which is why SNS has a separate tagging API at
+    # all. A provider managing tags here has no other way to read them back.
+    # Reasoning from the shape of the API response, not a hunch, but not a
+    # measurement either. This is the same call made for the same reason as
+    # logs:ListTagsForResource in mappings/logs.yaml.
+    read_actions:
+      - sns:GetTopicAttributes
+      - sns:ListTagsForResource
+
+    operations:
+      create:
+        - sns:CreateTopic
+        # Tag-on-create: CreateTopic accepts a Tags parameter, so no separate API
+        # call is expected — but the tagging action is still authorized. Same
+        # shape as iam:TagRole on CreateRole and ec2:CreateTags on CreateVpc,
+        # both of which WERE measured to be required with no separate call ever
+        # appearing. REASONED here from that precedent.
+        - action: sns:TagResource
+          when: { attribute_set: tags }
+      update:
+        # Deliberately NOT gated. Every in-place change to a topic — display
+        # name, the policy document, the delivery policy, the KMS key, the
+        # signature version, tracing, the archive policy, every one of the ten
+        # delivery-status feedback settings — is an attribute written by this one
+        # call. Enumerating that set to gate on it is how a gate comes to
+        # under-report.
+        - sns:SetTopicAttributes
+        - action: sns:TagResource
+          when: { attribute_changed: [tags] }
+        - action: sns:UntagResource
+          when: { attribute_changed: [tags] }
+      delete:
+        - sns:DeleteTopic
+
+    references:
+      # DELIVERY STATUS LOGGING HANDS A ROLE TO SNS, so the deploying identity
+      # needs iam:PassRole against that ROLE, not against the topic. This is the
+      # same class of requirement that aws_iam_instance_profile was MEASURED to
+      # need on 2026-09-02 and that AWS's own documentation misdirects you about:
+      # it describes the role's trust policy and never mentions the passer's
+      # permission. SCHEMA.md calls this the most commonly missed permission in
+      # real Terraform deploys.
+      #
+      # REASONED, NOT MEASURED, and THE LIKELIEST OVER-REPORT IN THIS FILE. If
+      # SNS does not in fact enforce PassRole when a feedback role is attached,
+      # every one of these produces a false positive — but only for topics that
+      # set the attribute, since all ten are gated, so a topic without delivery
+      # status logging is unaffected. Delete these first if the derivation
+      # harness contradicts them.
+      #
+      # All ten attributes already hold an ARN, so none needs an arn_format. All
+      # five protocols are listed rather than an arbitrary subset: picking
+      # favourites is how a list comes to under-report the one someone uses.
+      - action: iam:PassRole
+        arn_from: sqs_success_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: sqs_success_feedback_role_arn }
+      - action: iam:PassRole
+        arn_from: sqs_failure_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: sqs_failure_feedback_role_arn }
+      - action: iam:PassRole
+        arn_from: lambda_success_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: lambda_success_feedback_role_arn }
+      - action: iam:PassRole
+        arn_from: lambda_failure_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: lambda_failure_feedback_role_arn }
+      - action: iam:PassRole
+        arn_from: http_success_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: http_success_feedback_role_arn }
+      - action: iam:PassRole
+        arn_from: http_failure_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: http_failure_feedback_role_arn }
+      - action: iam:PassRole
+        arn_from: application_success_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: application_success_feedback_role_arn }
+      - action: iam:PassRole
+        arn_from: application_failure_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: application_failure_feedback_role_arn }
+      - action: iam:PassRole
+        arn_from: firehose_success_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: firehose_success_feedback_role_arn }
+      - action: iam:PassRole
+        arn_from: firehose_failure_feedback_role_arn
+        operations: [create, update]
+        when: { attribute_set: firehose_failure_feedback_role_arn }
+
+    notes: >-
+      DRAFT. Names checked with accessanalyzer:ValidatePolicy on 2026-09-25 and
+      all exist. Completeness is entirely unestablished — no apply has been run
+      and no topic was created to write this entry. The one entry in this
+      database checked empirically needed 17 actions where 3 were claimed, so
+      assume this list is SHORT rather than long.
+
+      THE FIRST THING TO CHECK: sns:GetDataProtectionPolicy is deliberately
+      absent from read_actions and is the most likely missing action in this
+      entry. The name is valid — it was checked — and it authorizes against the
+      topic ARN. It was left out because a data protection policy is managed by
+      the separate aws_sns_topic_data_protection_policy resource rather than by
+      an attribute of this one, so this resource's read has nothing to populate
+      from it. If the provider reads it unconditionally anyway — which is a
+      cheap thing for a read function to do and impossible to rule out by
+      inspection — every create of a topic reports a false "allowed". Reasoned
+      from which resource owns the attribute, not measured.
+
+      NO kms: REFERENCE, on purpose, and this matches mappings/sqs.yaml and
+      differs from aws_db_instance. kms_master_key_id on a topic is an
+      ATTRIBUTE: SNS records the key id and uses it later, at Publish time, with
+      the publisher's credentials. It does not establish a grant on the deploying
+      identity's behalf the way RDS does at create time, so the deploying
+      identity is believed to need no kms: action of its own — only
+      sns:CreateTopic and sns:SetTopicAttributes. Believed from the shape of the
+      integration, NOT measured. If SNS validates the key with the caller's
+      credentials (a kms:DescribeKey) or establishes a grant (a kms:CreateGrant)
+      when the attribute is set, this under-reports for every encrypted topic.
+      A further reason not to encode it: kms_master_key_id accepts an alias or a
+      bare key id as well as an ARN, so a reference keyed on it would often fail
+      to resolve and fall back to "*" regardless.
+
+      THE `when` GATES ARE REASONING, NOT MEASUREMENT, and every one of them
+      removes actions — the one edit that can introduce a false pass.
+      sns:TagResource on create assumes tag-on-create is authorized through
+      CreateTopic's Tags parameter; the ten iam:PassRole gates assume SNS needs
+      the role passed exactly when its ARN attribute is set.
+
+      FIFO TOPICS AND THE ARN. A FIFO topic's name must end in ".fifo". Set via
+      `name` this is already in the value and the ARN templates correctly; set
+      via `name_prefix` the generated name carries a suffix the synthesized
+      representative name does not, so the ARN is already inexact and a policy
+      scoped to "*.fifo" is reported as a denial it would not really produce. A
+      false positive, visible, inherent to prefix synthesis.
+
+      NOT COVERED, and therefore missing:
+
+      sns:AddPermission and sns:RemovePermission are valid action names and are
+      the older, statement-level policy API. The provider writes the `policy`
+      attribute through SetTopicAttributes instead, so a deploy role granted only
+      those two would be reported as denied.
+
+      The platform application and SMS sandbox APIs are a different resource
+      family entirely and are not mapped.
+
+  - type: aws_sns_topic_subscription
+    service: sns
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html
+    # THE CONSIDERED PART OF THIS ENTRY. The template is the whole value of the
+    # `topic_arn` attribute, not an ARN assembled from parts, because the
+    # attribute already holds a complete ARN. Justification for scoping to the
+    # TOPIC rather than to the subscription:
+    #
+    #   - SNS defines exactly one resource type, `topic`. There is no
+    #     subscription resource type for a policy to name.
+    #   - The Resource types column gives Subscribe, Unsubscribe,
+    #     GetSubscriptionAttributes and SetSubscriptionAttributes that same
+    #     `topic` type.
+    #
+    # So the topic ARN is not a broader stand-in for the thing AWS authorizes
+    # against — it IS the thing AWS authorizes against, which is the case the
+    # README warns can otherwise under-report. The subscription's own ARN would
+    # additionally be unknowable at plan time: it ends in a server-generated
+    # UUID.
+    arn_format: "${TopicArn}"
+    arn_attributes:
+      TopicArn: topic_arn
+    resource_policy_capable: [create, update, delete]
+    # The subscription's attributes — raw message delivery, the filter policy and
+    # its scope, the delivery policy, the redrive policy, confirmation status —
+    # come back only from this call. Required on delete too: the provider reads
+    # the subscription to confirm it is gone.
+    read_actions:
+      - sns:GetSubscriptionAttributes
+    operations:
+      create:
+        - sns:Subscribe
+        # Deliberately NOT gated, and that is a choice to over-report. Subscribe
+        # accepts an Attributes parameter, so a provider that passes everything
+        # inline would never need this on create — but the subscription has half
+        # a dozen optional attributes (raw_message_delivery, filter_policy,
+        # filter_policy_scope, delivery_policy, redrive_policy,
+        # subscription_role_arn), `attribute_set` gates on ONE attribute at a
+        # time, and a six-way gate that misses the seventh attribute is how a
+        # gate comes to under-report. Unconditional is the visible, safe
+        # direction: a subscription with no optional attributes over-reports by
+        # one action.
+        - sns:SetSubscriptionAttributes
+      update:
+        - sns:SetSubscriptionAttributes
+      delete:
+        - sns:Unsubscribe
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      resource_policy_capable lists all three operations. Subscribing acts on a
+      topic that already exists, and restricting sns:Subscribe is one of the
+      commonest things a topic policy does — a cross-account subscription is
+      usually authorized by the topic policy rather than by the subscriber's
+      identity policy alone. Because `sns` is not RCP-governed, claiming this
+      correctly genuinely matters here: without it, a finding could report
+      Verified while the topic policy denied the call.
+
+      NO TAGS AND NO aws:RequestTag CONTEXT KEY. SNS subscriptions cannot be
+      tagged. A property of the service, not an omission.
+
+      NO PERMISSIONS ON THE ENDPOINT, on purpose. Subscribing an SQS queue to a
+      topic does NOT require the deploying identity to hold sqs: actions: SNS
+      delivers under its own service principal and the queue's own policy is what
+      grants it, which in Terraform is a separate aws_sqs_queue_policy resource
+      with its own mapping. The same holds for a Lambda endpoint, whose
+      permission is an aws_lambda_permission. If the provider validates the
+      endpoint client-side, this under-reports — believed not to, not measured.
+
+      subscription_role_arn (used only by firehose subscriptions) is NOT encoded
+      as an iam:PassRole reference, and that is an inconsistency with
+      aws_sns_topic above, where all ten feedback roles are. It was left out
+      because firehose subscriptions are rare and the PassRole requirement is
+      reasoned rather than measured in both places; if the reasoning is right
+      there it is right here, and this under-reports for firehose subscriptions.
+      Flagged rather than silently inherited.
+
+      sns:ListSubscriptionsByTopic is deliberately absent. The provider stores
+      the subscription ARN as the resource id and reads it directly, so no
+      enumeration should be needed — but a pending-confirmation subscription
+      (http, https, email) has the literal id "pending confirmation" until the
+      endpoint confirms, and a provider recovering from that state may well
+      enumerate. The name is valid; only the necessity is unknown.
+
+      sns:ConfirmSubscription is not mapped and is believed not to belong: the
+      ENDPOINT confirms, not the deploying identity. With
+      endpoint_auto_confirms the provider only waits.
+
+  - type: aws_sns_topic_policy
+    service: sns
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html
+    # The `arn` attribute holds the target topic's complete ARN, so the template
+    # is that value verbatim. Unlike aws_sqs_queue_policy — whose only handle on
+    # its target is a URL and which therefore degrades to "*" — this entry can
+    # scope precisely, whenever the topic ARN is known at plan time. It usually
+    # is not, because the topic is normally created in the same run.
+    arn_format: "${TopicArn}"
+    arn_attributes:
+      TopicArn: arn
+    resource_policy_capable: [create, update, delete]
+    read_actions:
+      - sns:GetTopicAttributes
+    operations:
+      create:
+        - sns:SetTopicAttributes
+      update:
+        - sns:SetTopicAttributes
+      delete:
+        # Destroying this resource does not delete anything. The provider writes
+        # the DEFAULT topic policy back through SetTopicAttributes, which is the
+        # same call and the same authorization — the shape aws_s3_bucket_versioning
+        # has, where destroy suspends rather than removes.
+        - sns:SetTopicAttributes
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      resource_policy_capable lists CREATE as well as update and delete, and that
+      is the point of the entry. This resource rewrites the policy of a topic
+      that ALREADY EXISTS, so the policy currently on that topic governs the
+      SetTopicAttributes call — including on Terraform's create. Exactly the
+      aws_s3_bucket vs aws_s3_bucket_versioning distinction measured 2026-09-01.
+      A topic policy that locks out the deploying identity is the classic way to
+      brick a topic, and it is precisely the case this flag exists to stop the
+      tool from calling safe. With no RCP cap on `sns` to hide the mistake,
+      getting this wrong would produce a real false Verified.
+
+      sns:AddPermission and sns:RemovePermission are valid names and are the
+      older statement-level API; the provider does not use them here, so a deploy
+      role granted only those would be reported as denied.
+
+      This resource and aws_sns_topic's own `policy` attribute are alternative
+      ways to write the same thing, and Terraform configurations that use both
+      fight each other. That is a configuration problem rather than a
+      permissions one, but it means a plan can show a policy write on both
+      resources for a single logical change.

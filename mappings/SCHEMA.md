@@ -19,6 +19,7 @@ resources:
 | `arn_format` | string | no | ARN template using `${Var}` placeholders. |
 | `arn_attributes` | map | no | `${Var}` → Terraform attribute name. |
 | `arn_prefix_attributes` | map | no | `${Var}` → a `*_prefix` attribute, for names generated at apply time. See below. |
+| `arn_or_name` | map | no | `${Var}` → a declaration that the source attribute may hold a full ARN instead of a bare name. See below. |
 | `references` | list | no | Actions required against a **different** resource's ARN, such as `iam:PassRole`. See below. |
 | `resource_policy_capable` | list | no | Operations during which the resource's own policy can deny. See below. |
 | `context_keys` | map | no | Sources condition-key values from plan attributes. See below. |
@@ -105,6 +106,107 @@ Only useful where the ARN actually contains the generated name. A security
 group's ARN uses its group id, not its name, so a `name_prefix` there cannot
 help.
 
+## `arn_or_name`
+
+Several Terraform attributes accept **either a bare name or a full ARN**, and
+both spellings are common in real configurations:
+
+| Attribute | Name spelling | ARN spelling |
+|---|---|---|
+| `aws_lambda_permission.function_name` | `my-function` | `aws_lambda_function.x.arn` |
+| `aws_ecs_service.cluster` | `prod` | `aws_ecs_cluster.x.id` |
+| `aws_ecs_service.iam_role` | `ecs-service` | `aws_iam_role.x.arn` |
+
+Substitution is unconditional, so an entry that templates such an attribute
+nests one ARN inside another for half its users — a string that looks like an
+ARN, matches no policy ever written, and is reported with full confidence. Both
+Lambda and ECS entries used to omit `arn_format` entirely to avoid that, and
+paid for it with `*` on every operation.
+
+`arn_or_name` says the value must be **inspected before it is used**:
+
+```yaml
+arn_format: "arn:${Partition}:lambda:${Region}:${Account}:function:${FunctionName}"
+arn_attributes:
+  FunctionName: function_name
+arn_or_name:
+  FunctionName: { service: lambda, resource_type: function }
+```
+
+It works the same way on a `references` entry, where it takes no variable key
+because a reference has only one attribute:
+
+```yaml
+references:
+  - action: iam:PassRole
+    arn_from: iam_role
+    arn_format: "arn:${Partition}:iam::${Account}:role/${Name}"
+    arn_or_name: { service: iam, resource_type: role }
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `service` | yes | the ARN service segment the value must carry, e.g. `lambda` |
+| `resource_type` | yes | the resource-type segment, e.g. `function` in `function:my-fn` or `cluster` in `cluster/prod` |
+
+Both are required. Without `service`, any ARN at all is accepted; without
+`resource_type`, `arn:…:role/x` and `arn:…:user/x` are the same value, and
+building one out of the other is exactly the confident wrong answer the field
+exists to remove.
+
+### The three outcomes
+
+Detection is **three-valued, not two-valued**, and that is the whole safety
+argument. A plain "is this an ARN?" test fails in the dangerous direction:
+everything it cannot parse gets templated.
+
+| The value is | What happens |
+|---|---|
+| a bare name (no `:` and no `/`) | templated through `arn_format`, exact |
+| an ARN of the declared service **and** resource type | used as the target, exact |
+| anything else | `*`, `exact=false`, `arn_not_resolvable` |
+
+The third row is what catches the values that are *nearly* an ARN — a partial
+Lambda ARN (`123456789012:function:f`, which the Lambda API genuinely accepts),
+an alias-qualified name (`my-fn:PROD`), the resource half of an ARN pasted on its
+own (`cluster/prod`), a container tag (`myapp:v2`). None of them is a name, so
+none of them is templated.
+
+**An ARN for the wrong service is rejected, not passed through.** It is a
+well-formed ARN, so this is a deliberate choice: a `lambda` declaration seeing
+`arn:aws:s3:::my-bucket` means the premise is broken, and simulating a `lambda`
+action against an S3 ARN produces an implicit deny — a false positive
+manufactured out of a modelling error. `*` says "not checked", which is true.
+
+### Which direction it fails
+
+**Toward `*`, on every ambiguity.** Every check in the parser — segment
+charset, six fields, a twelve-digit or empty or `aws` account, a resource id
+with no further separators — rejects into the wildcard, never into a built ARN.
+The cost is a lost scoping and therefore a `Likely` where a `Verified` was
+possible; the cost of the other direction is a `Verified` against an ARN that
+names nothing.
+
+**The one thing to get right is the `service` / `resource_type` pair.** Declare
+them for the resource the attribute points at, not for the resource being
+changed: `aws_ecs_service.cluster` holds a **cluster** ARN even though the entry
+builds a **service** ARN.
+
+### Region and account follow the value
+
+When the attribute holds an ARN, its partition, account and region replace the
+caller's for the rest of that template. An ECS service lives in the region and
+account of its cluster, not of whoever is running `terraform`, so a cluster ARN
+in `eu-west-1` builds a service ARN in `eu-west-1`. Using the caller's would
+produce a well-formed ARN naming a resource that does not exist.
+
+On a `references` entry the ARN is used verbatim for the same reason — it is
+already the target, and decomposing and rebuilding it would quietly relocate a
+cross-account role into the account running the plan.
+
+If two declared attributes in one template disagree about partition, account or
+region, neither is used and the ARN degrades to `*`.
+
 ## Cross-resource requirements (`references`)
 
 Some actions are authorised against a **different** resource than the one being
@@ -125,11 +227,15 @@ references:
 |---|---|
 | `arn_from` | attribute holding the referenced resource. Required. |
 | `arn_format` | build an ARN when the attribute holds a bare **name** rather than an ARN. `${Name}` is the attribute's value. Omit when the attribute is already an ARN. |
+| `arn_or_name` | the attribute may hold **either** spelling; inspect it first. Requires `arn_format`. See [`arn_or_name`](#arn_or_name). |
 | `operations` | which operations need it. Empty means all. |
 | `when` | same conditions as a conditional action. |
 
 `aws_lambda_function.role` is already an ARN, so it needs no `arn_format`;
-`aws_iam_instance_profile.role` is a bare role name, so it does.
+`aws_iam_instance_profile.role` is a bare role name, so it does. Where the
+provider documents one spelling but the API accepts both —
+`aws_ecs_service.iam_role` — use `arn_or_name` rather than betting on the
+documentation.
 
 If the target ARN cannot be resolved the action is still checked, against `*`,
 and the finding is caveated — the same rule as the resource's own ARN. A
@@ -169,6 +275,7 @@ Two conditions, and deliberately no more:
 | Condition | Holds when |
 |---|---|
 | `attribute_set: <name>` | the attribute has a value in the state the operation acts on |
+| | **A `false` boolean counts as UNSET.** See the warning below before gating on one. |
 | `attribute_changed: [<names>]` | any named attribute differs between prior and planned state |
 
 This is not an expression language on purpose. A contributor has to be able to
@@ -179,6 +286,39 @@ anything richer defeats the point of an open, inspectable database.
 configured but unknown until apply counts as set, because it will have a value —
 we just cannot see it yet. Over-reporting produces a visible false positive;
 under-reporting produces a silent false pass.
+
+### Never gate on a boolean without checking its default
+
+`attribute_set` treats a `false` boolean as unset, because an empty string, an
+empty map and `false` are all "the user did not ask for anything". That is
+usually right and is occasionally a trap.
+
+It is safe when the attribute **defaults to false**, because "unset" and
+"explicitly false" then need the same (absent) API call.
+`aws_subnet.map_public_ip_on_launch` is that case, and the gate there is correct.
+
+It is **dangerous when the attribute defaults to true**, because the meaningful
+non-default is `false` — exactly the value the gate reads as absent. Gating
+`ec2:ModifyVpcAttribute` on `aws_vpc.enable_dns_support` would drop the action
+for the one configuration that needs it. That action is therefore listed
+unconditionally and over-reports on default VPCs, which is the correct side to
+err on.
+
+Measured 2026-09-25: an untagged VPC derived to three actions where a tagged one
+derived to five, which proved the `tags` gate correct and `ec2:ModifyVpcAttribute`
+surplus for defaults at the same time.
+
+### Measuring a gate
+
+A gate is only reasoning until the negative case has been run. Derive the same
+resource type from two fixtures — a maximal one with the attribute set, and a
+minimal one without — and the difference between the derived sets *is* the gate.
+`derivefixtures/aws_vpc` and `derivefixtures/aws_vpc__minimal` are the worked
+example.
+
+One trap when writing the minimal variant: a provider `default_tags` block
+applies to every resource in the configuration, so a minimal fixture that keeps
+one silently tags the resource and measures nothing.
 
 **Narrowing an action with `when` is the one edit that can introduce a false
 pass**, so tie it to evidence. Both shipped uses came from measurement:

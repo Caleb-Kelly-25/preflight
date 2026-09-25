@@ -148,6 +148,16 @@ has a safe direction and an unsafe one:
   **This is the one edit that can introduce a false pass**, because it *removes*
   actions. Tie every `when` to a measurement. Undecidable conditions keep the
   action.
+
+  Measure a gate by deriving the type **twice**, from a maximal fixture and a
+  minimal one; the difference between the two derived sets is the gate.
+  `derivefixtures/aws_vpc` and `aws_vpc__minimal` are the worked example, and
+  the only pair measured so far — every other gate in the database is still
+  reasoning.
+
+  **Never gate on a boolean without checking its default.** `attribute_set`
+  reads a `false` boolean as unset, so a gate on an attribute that defaults to
+  *true* drops the action for exactly the configuration that needs it.
 - **`references`** — actions required against a *different* resource's ARN.
   `iam:PassRole` is the case that matters and the most commonly missed
   permission in real deploys.
@@ -157,6 +167,18 @@ has a safe direction and an unsafe one:
 - **`arn_prefix_attributes`** — builds a representative ARN from a `name_prefix`
   when the real name is generated at apply time. Never exact, so it caps at
   `Likely`; it beats `*`, which matches no ARN-scoped policy at all.
+- **`arn_or_name`** — declares that an attribute may hold a bare name *or* a
+  full ARN (`aws_lambda_permission.function_name`, `aws_ecs_service.cluster`).
+  Works identically on a resource's `arn_format` and on a `references` entry.
+  **Detection is three-valued on purpose**: name → templated, ARN of the
+  declared `service` *and* `resource_type` → used as the target, anything else →
+  `*` and inexact. A two-valued "is this an ARN?" test fails the dangerous way,
+  because everything it cannot parse gets templated — a partial ARN
+  (`123456789012:function:f`) nested inside a synthetic one is confidently
+  wrong. An ARN for the *wrong service* is rejected rather than passed through:
+  it means the premise is broken, and simulating a `lambda` action against an S3
+  ARN manufactures a false positive. Both declaration fields are required;
+  without `resource_type`, `role/x` and `user/x` are the same value.
 
 Three tagging mechanisms have been measured across three services, and the
 permission is required every time for a different reason: S3 needs a separate

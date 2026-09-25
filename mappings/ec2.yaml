@@ -42,15 +42,27 @@ resources:
     operations:
       create:
         - ec2:CreateVpc
-        # Measured load-bearing. Note this differs mechanically from IAM:
-        # CreateVpc accepts TagSpecifications so no separate tagging call is
-        # made, yet ec2:CreateTags is still required to authorise it.
+        # THE FIRST GATE MEASURED IN BOTH DIRECTIONS, 2026-09-25. A tagged VPC
+        # requires this; an untagged one, derived from the __minimal fixture,
+        # does not. Note the mechanism differs from S3: CreateVpc accepts
+        # TagSpecifications so no separate tagging call is ever made, yet
+        # ec2:CreateTags is still required to authorise it.
         - action: ec2:CreateTags
           when: { attribute_set: tags }
-        # Measured load-bearing for a VPC whose DNS attributes differ from the
-        # defaults. Left unconditional rather than gated on the dns attributes:
-        # gating is the edit that can under-report, and this was only measured
-        # with them set.
+        # MEASURED SURPLUS for a default VPC, and deliberately still
+        # unconditional. The __minimal derivation proved a VPC with default DNS
+        # attributes does not need this, so listing it unconditionally
+        # over-reports — but the schema cannot express the condition safely.
+        #
+        # `attribute_set` is the only gate available, and it treats a false
+        # boolean as unset (see isSet in internal/mapping/mapping.go).
+        # enable_dns_support DEFAULTS TO TRUE, so the meaningful non-default is
+        # `false` — exactly the value the gate would read as absent. Gating here
+        # would therefore drop the action for the one configuration that needs
+        # it most, turning a safe over-report into a false "allowed".
+        #
+        # Over-reporting on default VPCs is the price. It is the right side to
+        # err on, and it is visible rather than silent.
         - ec2:ModifyVpcAttribute
       update:
         - ec2:ModifyVpcAttribute
@@ -74,6 +86,22 @@ resources:
       The fixture is derivefixtures/aws_vpc, whose committed lock file pins the
       provider version this result is valid for. A future run against a
       different provider may legitimately disagree.
+
+      GATE MEASURED 2026-09-25. Deriving the SAME type from a second fixture,
+      derivefixtures/aws_vpc__minimal (no tags, default DNS), returned three
+      actions rather than five. That is the first `when` gate anywhere in this
+      database established in both directions rather than reasoned: a tagged VPC
+      needs ec2:CreateTags and an untagged one provably does not.
+
+      The same run also proved ec2:ModifyVpcAttribute surplus for a default VPC.
+      It is still listed unconditionally, because the only gate the schema offers
+      reads a false boolean as unset and enable_dns_support defaults to true —
+      see the comment on the action itself.
+
+      Note for anyone writing a minimal variant: the maximal fixture sets
+      provider default_tags so leaked resources can be swept by tag, and
+      default_tags applies to every resource in the configuration. A minimal
+      fixture that keeps it silently tags the resource and measures nothing.
 
       Update is NOT verified: it was never exercised, and its actions are
       inferred rather than measured.
@@ -103,6 +131,13 @@ resources:
         - ec2:CreateSubnet
         - action: ec2:CreateTags
           when: { attribute_set: tags }
+        # This gate works, but only by luck, and the next person to copy the
+        # pattern should know why. `attribute_set` reads a false boolean as
+        # unset. map_public_ip_on_launch DEFAULTS to false, so "unset" and
+        # "explicitly false" happen to need the same (no) call. Any boolean that
+        # defaults to TRUE — enable_dns_support on aws_vpc, for instance —
+        # inverts that and the gate would drop the action precisely when it is
+        # required. Do not gate on a boolean without checking its default.
         - action: ec2:ModifySubnetAttribute
           when: { attribute_set: map_public_ip_on_launch }
       update:

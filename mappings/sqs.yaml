@@ -1,0 +1,243 @@
+# Amazon SQS
+#
+# VERIFICATION STATUS — every entry in this file is `draft`. Nothing here has
+# been near a real apply; no queue was created to write it.
+#
+# Two dimensions must hold before an entry is `verified`; see README.md.
+#   1. Names            - action NAMES checked 2026-09-25 via
+#                         accessanalyzer:ValidatePolicy. All 8 sqs actions used
+#                         below exist and are spelled correctly, as do the four
+#                         named-but-unmapped ones discussed in the notes. Zero
+#                         ERROR findings. (A deliberately planted
+#                         s3:PutBucketEncryption in the same document WAS
+#                         reported, so the validator was engaged.)
+#   2. Completeness     - NOT established. See the per-entry notes for the
+#                         specific places each list is expected to be short.
+#
+# ARNs. ValidatePolicy checks names only — measured 2026-09-25, it accepts
+# lambda:CreateFunction scoped to an S3 bucket ARN without complaint. So the
+# arn_format below was instead checked against the "Resource types" column of
+# the action table in the SQS page of the Service Authorization Reference.
+# Every action mapped here — CreateQueue, DeleteQueue, SetQueueAttributes,
+# GetQueueAttributes, TagQueue, UntagQueue, ListQueueTags — lists exactly one
+# resource type, `queue`, whose documented ARN is
+#
+#     arn:${Partition}:sqs:${Region}:${Account}:${QueueName}
+#
+# which is what this file templates. SQS has no other resource type, so there is
+# no narrower or broader form to get wrong. That is a reading of a documentation
+# table, not a measurement.
+#
+# RCP STATUS, AND IT DOMINATES EVERYTHING ELSE HERE: `sqs` IS in
+# internal/mapping's rcpServices. SimulatePrincipalPolicy does not evaluate
+# resource control policies, so no finding for any resource in this file can
+# reach Verified — on any operation, including create, because an RCP is
+# attached to the account or OU and therefore already exists when the queue is
+# created. Promoting these entries would not move a single confidence level. The
+# value of getting the lists right is that a denial is real and a `Likely`
+# allowed is honest, not that the ceiling moves.
+#
+# RESOURCE POLICIES. An SQS queue carries an access policy of its own — the
+# `policy` attribute, written through SetQueueAttributes — and
+# SimulatePrincipalPolicy will not evaluate it for a role. So it is set here,
+# and the per-operation distinction is the whole point:
+#
+#   aws_sqs_queue         [update, delete]           - a queue that does not
+#                                                      exist yet has no policy
+#                                                      to deny its own creation
+#   aws_sqs_queue_policy  [create, update, delete]   - its `create` writes to a
+#                                                      queue that already
+#                                                      exists, whose CURRENT
+#                                                      policy governs the call
+#
+# Same distinction as aws_s3_bucket vs aws_s3_bucket_versioning. Under-claiming
+# here would be a correctness bug rather than conservatism; it happens to be
+# unobservable in this file because the RCP cap above already holds every
+# finding at Likely, but it is claimed correctly anyway so the entries stay
+# right if that list ever changes.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsqs.html
+
+resources:
+  - type: aws_sqs_queue
+    service: sqs
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsqs.html
+    # `name` is known at plan time when set explicitly, so a create resolves to a
+    # real ARN rather than degrading to "*". Note the SQS ARN ends in the bare
+    # queue NAME with no path separator — unusual, and the reason this template
+    # has no "queue/" segment.
+    arn_format: "arn:${Partition}:sqs:${Region}:${Account}:${QueueName}"
+    arn_attributes:
+      QueueName: name
+    arn_prefix_attributes:
+      QueueName: name_prefix
+    resource_policy_capable: [update, delete]
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    # REASONED, NOT MEASURED.
+    #
+    # sqs:GetQueueAttributes is as close to certain as anything unmeasured gets:
+    # it is the only way to read a queue back, the provider polls it after
+    # CreateQueue to wait out SQS's create-then-visible eventual consistency, and
+    # it polls it again after DeleteQueue to wait for the queue to disappear. It
+    # is therefore load-bearing on all three operations, which is exactly what
+    # read_actions expresses.
+    #
+    # sqs:ListQueueTags IS included, and that is a DELIBERATE departure from the
+    # aws_vpc / aws_security_group finding that a separate tag-read action was
+    # surplus both times. Those were surplus because an ec2 Describe response
+    # carries the resource's tags inline. The SQS attribute map does not: the
+    # QueueAttributeName enumeration has no tag member at all, and ListQueueTags
+    # is a separate API precisely because of that. A provider managing tags on
+    # this resource has no other way to read them back. Reasoning from the shape
+    # of the API response, not a hunch — but still not a measurement.
+    read_actions:
+      - sqs:GetQueueAttributes
+      - sqs:ListQueueTags
+
+    operations:
+      create:
+        - sqs:CreateQueue
+        # Tag-on-create: CreateQueue accepts a Tags parameter, so no separate
+        # API call is expected — but the tagging action is still authorized.
+        # This is the same shape as iam:TagRole on CreateRole, which WAS measured
+        # to be required with no TagRole call ever appearing, and ec2:CreateTags
+        # on CreateVpc, likewise measured. REASONED here from that precedent.
+        - action: sqs:TagQueue
+          when: { attribute_set: tags }
+      update:
+        # Deliberately NOT gated. Every in-place change to a queue —
+        # visibility timeout, message retention, delay, max message size,
+        # receive wait time, the redrive policy, the redrive allow policy, the
+        # KMS key, the queue's own policy document — is an attribute written by
+        # this one call. Enumerating that set to gate on it is exactly how a gate
+        # comes to under-report.
+        - sqs:SetQueueAttributes
+        - action: sqs:TagQueue
+          when: { attribute_changed: [tags] }
+        - action: sqs:UntagQueue
+          when: { attribute_changed: [tags] }
+      delete:
+        - sqs:DeleteQueue
+
+    notes: >-
+      DRAFT. Names checked with accessanalyzer:ValidatePolicy on 2026-09-25 and
+      all exist. Completeness is entirely unestablished — no apply has been run
+      and no queue was created to write this entry. The one entry in this
+      database that was checked empirically needed 17 actions where 3 were
+      claimed, so assume this list is SHORT rather than long.
+
+      THE FIRST THING TO CHECK: sqs:GetQueueUrl is deliberately absent from
+      read_actions and is the most likely missing action in this file. The name
+      is valid — it was checked — and it authorizes against the same queue ARN,
+      so adding it costs nothing structurally. It was left out because the
+      provider stores the queue URL returned by CreateQueue as the resource id
+      and passes that URL straight to GetQueueAttributes, SetQueueAttributes and
+      DeleteQueue, which means no name-to-URL lookup should ever happen. If any
+      code path does resolve the queue by name instead — import is the obvious
+      candidate, and a refresh against a queue created outside this state is
+      another — every create of a queue reports a false "allowed". Reasoned from
+      the resource's identifier, not measured.
+
+      NO kms: REFERENCE, on purpose, and this differs from aws_db_instance.
+      kms_master_key_id on a queue is an ATTRIBUTE: SQS records the key id and
+      uses it later, at SendMessage and ReceiveMessage time, with the message
+      producer's and consumer's credentials. It does not establish a grant on the
+      deploying identity's behalf the way RDS does at create time, so the
+      deploying identity is believed to need no kms: action of its own — only
+      sqs:CreateQueue and sqs:SetQueueAttributes. Believed from the shape of the
+      integration, NOT measured. If SQS does validate the key with the caller's
+      credentials at CreateQueue time (a kms:DescribeKey) or establish a grant
+      (a kms:CreateGrant), this under-reports for every encrypted queue. The
+      counter-argument for leaving it out is real: kms_master_key_id accepts an
+      ALIAS or a bare key id as well as an ARN, so a reference keyed on it would
+      frequently fail to resolve and fall back to "*" anyway.
+
+      THE `when` GATES ARE REASONING, NOT MEASUREMENT, and both remove actions —
+      the one edit that can introduce a false pass. sqs:TagQueue on create
+      assumes tag-on-create is authorized through CreateQueue's Tags parameter
+      rather than through some other action; the tags-changed gates on update
+      assume the provider never re-puts tags on an unrelated change.
+
+      FIFO QUEUES AND THE ARN. A FIFO queue's name must end in ".fifo". When the
+      configuration sets `name` this is already in the value and the ARN
+      templates correctly. When it sets `name_prefix` instead, the provider
+      generates "<prefix><random>.fifo" and the representative name synthesized
+      from the prefix will NOT carry the suffix — the ARN is already marked
+      inexact in that case, so no finding can reach Verified on it, but a policy
+      scoped to "*.fifo" would be reported as a denial it would not really
+      produce. A false positive, visible, and inherent to prefix synthesis.
+
+      NOT COVERED, and therefore missing:
+
+      The queue's own `policy` attribute is written by sqs:SetQueueAttributes,
+      which IS mapped on update — but a queue created WITH a policy in the same
+      aws_sqs_queue block writes it through CreateQueue's Attributes parameter,
+      and whether IAM separately authorizes anything for that is unresolved.
+      sqs:AddPermission and sqs:RemovePermission are valid action names and are
+      the older, statement-level policy API; the provider does not use them, so
+      a deploy role granted only those would be reported as denied.
+
+      sqs:PurgeQueue is not mapped and should not be. Terraform never empties a
+      queue on destroy — there is no force_destroy equivalent here.
+
+  - type: aws_sqs_queue_policy
+    service: sqs
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsqs.html
+    # NO arn_format, ON PURPOSE, and this is the known defect in this entry.
+    #
+    # The resource's only identifying attribute is `queue_url`, which holds
+    # "https://sqs.<region>.amazonaws.com/<account>/<name>" — a URL, not an ARN,
+    # and not a bare name either. arn_format substitutes an attribute's value
+    # into a template verbatim, so the only thing it could produce here is an
+    # ARN with a URL embedded in it: a literal that matches no policy ever
+    # written, reported as a denial on every queue policy in existence.
+    #
+    # Falling back to "*" costs a confidence level and attaches a visible
+    # arn_not_resolvable caveat. Emitting a malformed ARN would instead be
+    # confidently wrong. Until the schema can extract the last path segment of
+    # a URL, "*" is the honest answer.
+    resource_policy_capable: [create, update, delete]
+    # Reading the policy back means reading the queue's attributes; there is no
+    # GetQueuePolicy API. Same call the queue resource uses, and required on
+    # delete too, because the provider reads the queue to confirm the policy is
+    # gone. sqs:ListQueueTags is NOT here: a queue policy carries no tags.
+    read_actions:
+      - sqs:GetQueueAttributes
+    operations:
+      create:
+        - sqs:SetQueueAttributes
+      update:
+        - sqs:SetQueueAttributes
+      delete:
+        # Destroying this resource does not delete anything. The provider writes
+        # an empty Policy attribute back to the queue, which is still a
+        # SetQueueAttributes call — the same shape as aws_s3_bucket_versioning,
+        # whose destroy suspends versioning rather than removing it.
+        - sqs:SetQueueAttributes
+    notes: >-
+      DRAFT. Names checked 2026-09-25; completeness unestablished.
+
+      resource_policy_capable lists CREATE as well as update and delete, and that
+      is the point of the entry. A queue policy is written to a queue that
+      ALREADY EXISTS, so the policy currently on that queue governs the
+      SetQueueAttributes call regardless of what the identity policy allows —
+      including on Terraform's create. This is exactly the aws_s3_bucket
+      vs aws_s3_bucket_versioning distinction, measured on 2026-09-01. Getting
+      it wrong in the other direction would let a finding claim Verified when a
+      queue policy could still deny the call. (In this file the RCP cap makes
+      that unobservable, but the claim is made correctly regardless.)
+
+      A queue policy that locks out the deploying identity is not hypothetical —
+      it is the classic way to brick a queue, and it is precisely the case this
+      flag exists to stop the tool from calling safe.
+
+      The ARN degrades to "*" for the reason documented above the entry, which
+      means every finding here carries an arn_not_resolvable caveat on top of
+      the resource-policy and RCP caps. This entry is therefore close to
+      maximally caveated: it will tell you the identity lacks
+      sqs:SetQueueAttributes entirely, and little more than that.

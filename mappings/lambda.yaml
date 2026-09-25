@@ -164,8 +164,18 @@ resources:
     service: lambda
     status: draft
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
-    # DELIBERATELY NO arn_format. See notes — `function_name` is polymorphic and
-    # templating it would be wrong half the time.
+    # `function_name` accepts a bare name OR a full function ARN, and both
+    # spellings are common. arn_or_name is what makes templating it safe: a
+    # value that already parses as a lambda `function` ARN contributes its own
+    # name and its own region/account, a bare name is templated against the
+    # caller's, and anything else — a partial ARN like `123456789012:function:f`,
+    # a qualified name like `f:PROD` — degrades to "*" rather than being nested
+    # inside a synthetic ARN.
+    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:function:${FunctionName}"
+    arn_attributes:
+      FunctionName: function_name
+    arn_or_name:
+      FunctionName: { service: lambda, resource_type: function }
     #
     # This resource manipulates the function's resource-based policy directly,
     # and it always acts on a function that already exists — so unlike the
@@ -184,17 +194,31 @@ resources:
     notes: >-
       DRAFT. Names checked 2026-09-25; completeness unestablished.
 
-      NO arn_format ON PURPOSE. `function_name` accepts either a bare function
-      name or a full function ARN, and both spellings are common in the wild
-      (`aws_lambda_function.x.function_name` versus `aws_lambda_function.x.arn`).
-      The schema has no way to say "use the value as-is if it is already an ARN,
-      otherwise template it". Templating unconditionally would produce
-      arn:...:function:arn:...:function:name for the ARN spelling — a
-      syntactically plausible ARN that matches no real policy, which is a
-      confident wrong answer. Leaving it out degrades to "*" with a visible
-      arn_not_resolvable caveat instead. That loses scoping and is the honest
-      trade; if the schema ever grows an "already an ARN" marker, this entry
-      wants it first.
+      ARN SCOPING REGAINED 2026-09-25, AND IT IS REASONED RATHER THAN MEASURED.
+      This entry previously carried no arn_format at all and simulated against
+      "*" on every operation, because `function_name` accepts either a bare
+      function name or a full function ARN — both spellings are common in the
+      wild (`aws_lambda_function.x.function_name` versus
+      `aws_lambda_function.x.arn`) and templating unconditionally would have
+      produced arn:...:function:arn:...:function:name for the ARN spelling: a
+      syntactically plausible ARN matching no real policy, which is a confident
+      wrong answer.
+
+      The schema now has the marker this entry asked for. `arn_or_name` inspects
+      the value first, so the ARN spelling is recognised and used as written
+      (including its own region and account, which may not be the caller's) and
+      the name spelling is templated. Anything that is neither still degrades to
+      "*" with the arn_not_resolvable caveat, so nothing here can present as
+      checked when it is not.
+
+      What is NOT established is whether the ARN shape is the one
+      AddPermission and RemovePermission are actually authorised against. It is
+      reasoned from the service authorization reference, and the caveat at the
+      top of this file applies: ValidatePolicy does not check
+      action/resource compatibility, so a wrongly-shaped ARN fails as a false
+      positive rather than loudly. A policy scoped to a qualified function ARN
+      (`function:my-fn:PROD`) will not match the unqualified ARN this entry
+      builds.
 
       Most changes to this resource force replacement rather than an in-place
       update, so the update list is reasoning rather than observation. It is

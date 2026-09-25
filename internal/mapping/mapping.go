@@ -67,6 +67,12 @@ type Reference struct {
 	// aws_lambda_function.role is already an ARN. ${Name} is the attribute's
 	// value; ${Partition}, ${Account} and ${Region} come from the caller.
 	ARNFormat string `yaml:"arn_format,omitempty"`
+	// ARNOrName says the attribute may hold EITHER spelling, so the value is
+	// inspected before ARNFormat is applied: a recognised ARN is used as
+	// written, a bare name is templated, and anything else degrades to "*".
+	// aws_ecs_service.iam_role is documented as an ARN but the ECS API accepts
+	// a name there too, which is the case this covers.
+	ARNOrName *ARNOrName `yaml:"arn_or_name,omitempty"`
 	// Operations limits which operations need this. Empty means all of them.
 	// Deleting an instance profile removes the role rather than passing it, so
 	// scoping matters.
@@ -137,6 +143,12 @@ type Resource struct {
 	// when the real name is generated at apply time. See BuildARN for why a
 	// representative name beats "*" here.
 	ARNPrefixAttributes map[string]string `yaml:"arn_prefix_attributes,omitempty"`
+	// ARNOrName marks ARN variables whose source attribute may hold a full ARN
+	// instead of a bare name — aws_lambda_permission.function_name and
+	// aws_ecs_service.cluster both do. Without it, substitution is
+	// unconditional and an ARN-valued attribute is nested inside the template.
+	// See ARNOrName's own comment for why both of its fields are required.
+	ARNOrName map[string]ARNOrName `yaml:"arn_or_name,omitempty"`
 	// Operations lists the IAM actions each lifecycle operation requires.
 	Operations map[Operation][]Action `yaml:"operations"`
 
@@ -280,9 +292,9 @@ func (r Resource) validate() error {
 	if r.Status == StatusVerified && len(r.VerifiedOperations) > 0 {
 		return fmt.Errorf("%s: `verified_operations` is redundant with status %q, which already covers every operation", r.Type, StatusVerified)
 	}
-	// A prefix attribute keyed to a variable the ARN template does not use is a
-	// typo that would silently never apply, leaving the ARN at "*" forever.
-	if len(r.ARNPrefixAttributes) > 0 {
+	// An attribute keyed to a variable the ARN template does not use is a typo
+	// that would silently never apply, leaving the ARN at "*" forever.
+	if len(r.ARNPrefixAttributes) > 0 || len(r.ARNOrName) > 0 {
 		vars := make(map[string]bool)
 		for _, v := range r.ARNVars() {
 			vars[v] = true
@@ -292,6 +304,21 @@ func (r Resource) validate() error {
 				return fmt.Errorf("%s: arn_prefix_attributes names ${%s}, which arn_format does not use", r.Type, v)
 			}
 		}
+		for v, decl := range r.ARNOrName {
+			if !vars[v] {
+				return fmt.Errorf("%s: arn_or_name names ${%s}, which arn_format does not use", r.Type, v)
+			}
+			// arn_or_name inspects the value of an attribute, so there has to
+			// be an attribute. Keyed to a variable filled only from a
+			// name_prefix it would never run, and the polymorphic value it was
+			// added to guard would be templated unchecked.
+			if r.ARNAttributes[v] == "" {
+				return fmt.Errorf("%s: arn_or_name names ${%s}, which has no arn_attributes entry to read a value from", r.Type, v)
+			}
+			if err := decl.validate(); err != nil {
+				return fmt.Errorf("%s: ${%s}: %w", r.Type, v, err)
+			}
+		}
 	}
 	for _, ref := range r.References {
 		if !strings.Contains(ref.Action, ":") {
@@ -299,6 +326,17 @@ func (r Resource) validate() error {
 		}
 		if ref.ARNFrom == "" {
 			return fmt.Errorf("%s: reference %q has no `arn_from`; without it there is no resource to check against", r.Type, ref.Action)
+		}
+		if ref.ARNOrName != nil {
+			// Without a template there is nothing to do in the bare-name half
+			// of "either a name or an ARN", so the declaration would only ever
+			// be able to reject — never to improve on today's behaviour.
+			if ref.ARNFormat == "" {
+				return fmt.Errorf("%s: reference %q sets `arn_or_name` without `arn_format`; there would be nothing to build when the attribute holds a bare name", r.Type, ref.Action)
+			}
+			if err := ref.ARNOrName.validate(); err != nil {
+				return fmt.Errorf("%s: reference %q: %w", r.Type, ref.Action, err)
+			}
 		}
 		for _, op := range ref.Operations {
 			switch op {

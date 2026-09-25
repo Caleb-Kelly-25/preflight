@@ -52,6 +52,23 @@ func (ref Reference) buildARN(ctx ARNContext, attrs, unknown map[string]any) (st
 	if !ok || v == "" {
 		return "*", false
 	}
+	if ref.ARNOrName != nil {
+		switch kind, _ := ref.ARNOrName.classify(v); kind {
+		case valueARN:
+			// The attribute already holds the ARN we want, so there is nothing
+			// to build. Deliberately used verbatim rather than decomposed and
+			// re-templated: the caller's partition, account and region are not
+			// necessarily the target's, and rebuilding would quietly relocate a
+			// cross-account role into the account running terraform.
+			return v, true
+		case valueAmbiguous:
+			// Neither spelling. Templating it would nest an unrecognised value
+			// inside a synthetic ARN and report it with confidence.
+			return "*", false
+		}
+		// valueName falls through to the template below, which is what the
+		// declaration exists to make safe.
+	}
 	if ref.ARNFormat == "" {
 		return v, true
 	}
@@ -105,6 +122,17 @@ func (r Resource) BuildARN(ctx ARNContext, after, afterUnknown map[string]any) (
 		return "*", false
 	}
 
+	// Polymorphic attributes are resolved BEFORE the substitution walk, not
+	// during it, for two reasons. One is ordering: an attribute that turns out
+	// to hold an ARN also tells us which partition, account and region the
+	// target really lives in, and those placeholders appear earlier in the
+	// template than the name does. The other is that a value we cannot identify
+	// has to abort the whole ARN rather than one placeholder.
+	names, ctx, ok := r.resolveARNOrName(ctx, after, afterUnknown)
+	if !ok {
+		return "*", false
+	}
+
 	resolved := true
 	// approximate marks an ARN built from a name_prefix rather than a real
 	// name. The string is usable, but it is not the resource's actual ARN.
@@ -133,6 +161,12 @@ func (r Resource) BuildARN(ctx ARNContext, after, afterUnknown map[string]any) (
 			return ctx.Region
 		}
 
+		// A value already normalised by arn_or_name wins: it is the same
+		// attribute, read through the check that makes it safe to substitute.
+		if s, ok := names[name]; ok {
+			return s
+		}
+
 		if s, ok := stringAttr(after, afterUnknown, r.ARNAttributes[name]); ok {
 			return s
 		}
@@ -157,6 +191,74 @@ func (r Resource) BuildARN(ctx ARNContext, after, afterUnknown map[string]any) (
 		return "*", false
 	}
 	return out, !approximate
+}
+
+// resolveARNOrName reads every attribute declared with arn_or_name and reduces
+// it to the bare name the template needs, returning those names keyed by ARN
+// variable together with the context the template should be built in.
+//
+// ok=false means a declared attribute held something that is neither a name nor
+// a recognisable ARN. That aborts the whole ARN rather than one placeholder,
+// because the alternative — substituting it anyway — is the exact failure this
+// field was added to remove.
+//
+// When the value IS an ARN, its partition, account and region replace the
+// caller's for the rest of the template. That is not a refinement, it is the
+// correctness of the feature: an ECS service lives in the region and account of
+// its cluster, not of whoever is running terraform, so a cluster ARN pointing at
+// eu-west-1 must build a service ARN in eu-west-1. Using the caller's region
+// there would produce a well-formed ARN naming a resource that does not exist —
+// confidently wrong, which is worse than "*".
+func (r Resource) resolveARNOrName(ctx ARNContext, after, afterUnknown map[string]any) (map[string]string, ARNContext, bool) {
+	if len(r.ARNOrName) == 0 {
+		return nil, ctx, true
+	}
+
+	names := make(map[string]string, len(r.ARNOrName))
+	var adopted *parsedARN
+	for v, decl := range r.ARNOrName {
+		s, ok := stringAttr(after, afterUnknown, r.ARNAttributes[v])
+		if !ok {
+			// Absent, or unknown until apply. Not a failure here: the
+			// substitution walk degrades it exactly as it degrades any other
+			// unfillable variable, including falling back to a name_prefix.
+			continue
+		}
+		kind, p := decl.classify(s)
+		switch kind {
+		case valueName:
+			names[v] = s
+		case valueARN:
+			names[v] = p.ResourceID
+			if adopted != nil && (adopted.Partition != p.Partition ||
+				adopted.Region != p.Region || adopted.Account != p.Account) {
+				// Two declared attributes disagree about where the target
+				// lives. One of them must be wrong and nothing here can tell
+				// which, so neither is used.
+				return nil, ctx, false
+			}
+			q := p
+			adopted = &q
+		default:
+			return nil, ctx, false
+		}
+	}
+
+	if adopted != nil {
+		// Empty segments are not adopted: an IAM ARN carries no region, and
+		// overwriting the caller's with "" would break any template that uses
+		// ${Region} for something else.
+		if adopted.Partition != "" {
+			ctx.Partition = adopted.Partition
+		}
+		if adopted.Region != "" {
+			ctx.Region = adopted.Region
+		}
+		if adopted.Account != "" {
+			ctx.Account = adopted.Account
+		}
+	}
+	return names, ctx, true
 }
 
 // prefixPlaceholder stands in for the suffix Terraform appends to a name_prefix.

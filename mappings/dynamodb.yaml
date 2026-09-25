@@ -1,0 +1,257 @@
+# Amazon DynamoDB
+#
+# VERIFICATION STATUS — the single entry in this file is `draft`. Nothing here
+# has been near a real apply; no table was created to write it.
+#
+# Two dimensions must hold before an entry is `verified`; see README.md.
+#   1. Names            - action NAMES checked 2026-09-25 via
+#                         accessanalyzer:ValidatePolicy. All 13 dynamodb actions
+#                         used below exist and are spelled correctly, as do the
+#                         dozen named-but-unmapped ones discussed in the notes.
+#                         Zero ERROR findings. (A deliberately planted
+#                         s3:PutBucketEncryption in the same document WAS
+#                         reported, so the validator was engaged.) That check
+#                         earned its keep here: the tag-read action is
+#                         dynamodb:ListTagsOfResource, NOT ListTagsForResource,
+#                         which is the spelling sns and logs use.
+#   2. Completeness     - NOT established. See the notes for the specific places
+#                         this list is expected to be short.
+#
+# ARNs. ValidatePolicy checks names only — measured 2026-09-25, it accepts
+# lambda:CreateFunction scoped to an S3 bucket ARN without complaint. So the
+# arn_format below was instead checked against the "Resource types" column of
+# the action table in the DynamoDB page of the Service Authorization Reference.
+# Every action mapped here — CreateTable, UpdateTable, DeleteTable,
+# DescribeTable, UpdateTimeToLive, DescribeTimeToLive, UpdateContinuousBackups,
+# DescribeContinuousBackups, RestoreTableToPointInTime, ImportTable — lists
+# `table`, whose documented ARN is
+#
+#     arn:${Partition}:dynamodb:${Region}:${Account}:table/${TableName}
+#
+# and the three tagging actions list `table` and `stream`. DynamoDB defines six
+# other resource types (index, stream, backup, export, import, global-table);
+# see the notes for the one place that matters. A reading of a documentation
+# table, not a measurement.
+#
+# RCP STATUS, AND IT DOMINATES EVERYTHING ELSE HERE: `dynamodb` IS in
+# internal/mapping's rcpServices. SimulatePrincipalPolicy does not evaluate
+# resource control policies, so no finding for this resource can reach Verified
+# — on any operation, including create, because an RCP is attached to the
+# account or OU and therefore already exists when the table is created.
+# Promoting this entry would not move a single confidence level. The value of
+# getting the list right is that a denial is real and a `Likely` allowed is
+# honest, not that the ceiling moves.
+#
+# RESOURCE POLICIES. DynamoDB gained resource-based policies after most of this
+# database was written, and the Service Authorization Reference confirms it:
+# PutResourcePolicy, GetResourcePolicy and DeleteResourcePolicy authorize
+# against `table` and `stream`, and Terraform exposes them as the separate
+# aws_dynamodb_resource_policy resource. A table can therefore carry a policy
+# that denies the deploying identity, and SimulatePrincipalPolicy will not
+# evaluate it for a role — so resource_policy_capable is set to [update, delete]
+# below on the usual per-operation reasoning: a table that does not exist yet has
+# no policy to deny its own creation.
+#
+# This is deliberately the opposite call to the one mappings/logs.yaml makes,
+# and the difference is real rather than stylistic: a CloudWatch Logs resource
+# policy is an account-level object that grants OTHER SERVICES delivery access
+# and does not govern the deployer, whereas a DynamoDB resource policy is
+# attached to the individual table and does govern control-plane calls against
+# it. It is claimed on the conservative side regardless; the RCP cap above makes
+# the claim unobservable today, which is what made it safe to settle on
+# reasoning alone.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazondynamodb.html
+
+resources:
+  - type: aws_dynamodb_table
+    service: dynamodb
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazondynamodb.html
+    # `name` is required and known at plan time, so a create resolves to a real
+    # ARN rather than degrading to "*" — a better position than most entries in
+    # this database. There is no name_prefix attribute on this resource, so no
+    # arn_prefix_attributes.
+    arn_format: "arn:${Partition}:dynamodb:${Region}:${Account}:table/${TableName}"
+    arn_attributes:
+      TableName: name
+    resource_policy_capable: [update, delete]
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    # REASONED, NOT MEASURED, and this is the part of the entry most likely to
+    # be wrong — in the direction of missing something. Four separate APIs,
+    # because a DynamoDB table's state does not come back from one call:
+    #
+    #   DescribeTable              key schema, attributes, capacity, GSIs, LSIs,
+    #                              the stream specification, SSE, table class,
+    #                              deletion protection. Also polled after create
+    #                              until ACTIVE, after every UpdateTable, and
+    #                              after DeleteTable until the table is gone —
+    #                              so it is load-bearing on all three operations,
+    #                              which is exactly what read_actions expresses.
+    #   DescribeTimeToLive         the `ttl` block. A separate API; DescribeTable
+    #                              does not return TTL state.
+    #   DescribeContinuousBackups  the `point_in_time_recovery` block. Likewise a
+    #                              separate API.
+    #   ListTagsOfResource         tags.
+    #
+    # ListTagsOfResource IS included, a deliberate departure from the aws_vpc /
+    # aws_security_group finding that a separate tag-read action was surplus both
+    # times. Those were surplus because an ec2 Describe response carries tags
+    # inline. A DynamoDB TableDescription does not: it has no tag member, which
+    # is why the tagging API is separate. Reasoning from the shape of the
+    # response, not a hunch.
+    #
+    # The two Describe* calls for TTL and PITR are listed UNCONDITIONALLY even
+    # though read_actions cannot be gated, on the belief that the provider reads
+    # both on every refresh regardless of whether the configuration sets them —
+    # it has to, to detect drift into them. If it actually skips them when the
+    # blocks are absent, this over-reports by two actions for a plain table:
+    # visible, and the safe direction.
+    read_actions:
+      - dynamodb:DescribeTable
+      - dynamodb:DescribeTimeToLive
+      - dynamodb:DescribeContinuousBackups
+      - dynamodb:ListTagsOfResource
+
+    operations:
+      create:
+        # Left unconditional even though the two gated actions below replace it
+        # in their respective configurations — a restore or an import does not
+        # call CreateTable. Over-reports for those two shapes, which is the
+        # visible, safe direction; gating it would be the edit that can
+        # under-report. Same call as rds:CreateDBInstance.
+        - dynamodb:CreateTable
+        # Tag-on-create: CreateTable accepts a Tags parameter, so no separate API
+        # call is expected — but the tagging action is still authorized. Same
+        # shape as iam:TagRole on CreateRole and ec2:CreateTags on CreateVpc,
+        # both MEASURED to be required with no separate call ever appearing.
+        # REASONED here from that precedent.
+        - action: dynamodb:TagResource
+          when: { attribute_set: tags }
+        # GENUINE SECOND CALLS, not extra permissions on CreateTable. Neither TTL
+        # nor point-in-time recovery is a CreateTable parameter — both are
+        # configured by their own API after the table goes ACTIVE — so a table
+        # declaring either makes an extra authorized call on create. Same shape
+        # as s3:PutBucketTagging on a bucket create, which was measured.
+        - action: dynamodb:UpdateTimeToLive
+          when: { attribute_set: ttl }
+        - action: dynamodb:UpdateContinuousBackups
+          when: { attribute_set: point_in_time_recovery }
+        # Different APIs entirely. Gated because asking every user of this
+        # resource for restore and import permissions they will never use is a
+        # false positive on essentially every table in the world. Same reasoning
+        # as rds:RestoreDBInstanceFromDBSnapshot.
+        - action: dynamodb:RestoreTableToPointInTime
+          when: { attribute_set: restore_source_name }
+        - action: dynamodb:ImportTable
+          when: { attribute_set: import_table }
+      update:
+        # Deliberately NOT gated on any attribute. Nearly every in-place change to
+        # a table — billing mode, provisioned capacity, adding/removing a global
+        # secondary index, the stream specification, server-side encryption, the
+        # table class, deletion protection, warm throughput — goes through this
+        # one call, and enumerating that set to gate on it is exactly how a gate
+        # comes to under-report. Same call as rds:ModifyDBInstance.
+        - dynamodb:UpdateTable
+        - action: dynamodb:UpdateTimeToLive
+          when: { attribute_changed: [ttl] }
+        - action: dynamodb:UpdateContinuousBackups
+          when: { attribute_changed: [point_in_time_recovery] }
+        - action: dynamodb:TagResource
+          when: { attribute_changed: [tags] }
+        - action: dynamodb:UntagResource
+          when: { attribute_changed: [tags] }
+      delete:
+        - dynamodb:DeleteTable
+
+    notes: >-
+      DRAFT. Names checked with accessanalyzer:ValidatePolicy on 2026-09-25 and
+      all exist. Completeness is entirely unestablished — no apply has been run
+      and no table was created to write this entry. The one entry in this
+      database checked empirically needed 17 actions where 3 were claimed, so
+      assume this list is SHORT rather than long.
+
+      THE KNOWN UNDER-REPORT, AND IT IS THE FIRST THING TO FIX: a table encrypted
+      with a CUSTOMER-MANAGED KMS KEY almost certainly needs kms:CreateGrant and
+      kms:DescribeKey against that key, held by the DEPLOYING identity — the same
+      requirement aws_db_instance encodes as a reference, because DynamoDB
+      establishes a grant on the key on the caller's behalf at CreateTable time.
+      It is NOT encoded here, and the reason is mechanical rather than a
+      judgement: the key lives at server_side_encryption[0].kms_key_arn, a nested
+      block, and both `arn_from` and `attribute_set` read FLAT top-level
+      attributes only. A reference keyed on `server_side_encryption` would (a)
+      resolve its ARN to "*" every time, since the attribute is a list of objects
+      rather than a string, and (b) fire for `server_side_encryption { enabled =
+      true }` with no key named, which uses an AWS-managed key and needs no
+      caller permission at all — a red check on a very common configuration.
+      Encoding it would have bought a wildcard-scoped check at the price of a
+      systematic false positive. It is recorded here instead, per SCHEMA.md's
+      "Not yet expressible" instruction. Anyone running a CMK-encrypted table
+      should assume preflight under-reports by those two actions until the schema
+      can address a nested attribute.
+
+      THE `when` GATES ARE REASONING, NOT MEASUREMENT, and every one removes
+      actions — the one edit that can introduce a false pass. Specifically:
+      dynamodb:TagResource on create assumes tag-on-create rides on CreateTable's
+      Tags parameter; UpdateTimeToLive and UpdateContinuousBackups assume the
+      provider makes those calls exactly when the corresponding block is present;
+      RestoreTableToPointInTime and ImportTable assume the provider dispatches to
+      those APIs on exactly the attributes named. Two known imprecisions, both
+      over-reporting: a `ttl` block with enabled = false, and a
+      `point_in_time_recovery` block with enabled = false, are still non-empty
+      lists and so still count as set.
+
+      GLOBAL SECONDARY INDEXES, which the reader will look for. No separate
+      action is mapped for them and that is deliberate: on create the
+      global_secondary_index blocks are a CreateTable parameter, and on update
+      every index add, delete or capacity change is a GlobalSecondaryIndexUpdates
+      element on UpdateTable, which is already listed unconditionally. The one
+      place indexes could still bite is the ARN: the Resource types column gives
+      several actions an `index` type, whose ARN is the table ARN with an
+      "/index/<IndexName>" suffix, and this entry only ever simulates against the
+      table ARN. For the actions mapped
+      here that is right — UpdateTable authorizes against `table` — but a policy
+      written to allow the table ARN and nothing else would be reported as
+      allowing index work that a stricter reading might deny. Unresolved.
+
+      STREAMS. stream_enabled and stream_view_type are a StreamSpecification on
+      CreateTable and on UpdateTable, so no extra action is mapped. The stream
+      has an ARN of its own (.../table/NAME/stream/LABEL) that the tagging
+      actions can authorize against, and it is not knowable at plan time. If
+      enabling a stream turns out to authorize against the stream rather than the
+      table, this entry asks about the wrong ARN.
+
+      REPLICAS AND GLOBAL TABLES ARE NOT COVERED, and this is the largest gap.
+      A `replica` block makes the provider manage cross-region replicas;
+      dynamodb:CreateTableReplica, dynamodb:DeleteTableReplica and
+      dynamodb:UpdateTableReplicaAutoScaling are all valid action names, and
+      dynamodb:DescribeTableReplicaAutoScaling is a read the provider may well
+      make for such a table. None is mapped, so every global table under-reports.
+      They were left out rather than guessed at because the dispatch — whether
+      the provider uses UpdateTable's ReplicaUpdates or the dedicated replica
+      APIs, and which of them IAM then authorizes — cannot be settled by
+      inspection.
+
+      ALSO NOT COVERED: the Kinesis streaming destination
+      (dynamodb:EnableKinesisStreamingDestination,
+      DisableKinesisStreamingDestination, DescribeKinesisStreamingDestination —
+      all valid names), which this resource can configure in recent provider
+      versions; dynamodb:UpdateContributorInsights; and the table's own
+      resource-based policy, which Terraform models as the separate
+      aws_dynamodb_resource_policy resource and which is not mapped in this
+      database at all.
+
+      restore_source_table_arn is an alternative to restore_source_name in recent
+      provider versions and is NOT gated on, so a restore expressed that way
+      loses dynamodb:RestoreTableToPointInTime. An inconsistency and a genuine
+      under-report; `attribute_set` takes one attribute, and listing the action
+      twice on two gates would fix it at the cost of a duplicate entry. Flagged
+      rather than silently inherited.
+
+      deletion_protection_enabled is not modelled. A table protected at destroy
+      time fails the apply rather than making an extra call, so delete neither
+      over- nor under-reports for it — but the failure looks like something
+      preflight should have caught and did not.
