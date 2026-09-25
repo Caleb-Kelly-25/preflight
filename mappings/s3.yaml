@@ -1,21 +1,23 @@
 # Amazon S3
 #
-# VERIFICATION STATUS
-#
-#   aws_s3_bucket  ....................  VERIFIED (empirically, provider v5.100.0)
-#   everything else  ..................  draft
+# VERIFICATION STATUS — see the per-entry status and verified_operations fields.
+# aws_s3_bucket is fully verified; every other entry here has a derived CREATE
+# path and unverified update/delete paths.
 #
 # Two dimensions must hold before an entry is `verified`; see README.md.
-#   1. Names and ARNs   - checked via accessanalyzer:ValidatePolicy, which is
-#                         authoritative. Done for every entry in this file.
+#   1. Names            - checked via accessanalyzer:ValidatePolicy. NAMES ONLY:
+#                         measured 2026-09-25, it reports nothing for an action
+#                         scoped to a resource type it cannot apply to. The
+#                         arn_formats are checked separately, by cmd/arncheck
+#                         against AWS's machine-readable service reference.
 #   2. Completeness     - proven only by granting a role exactly the mapped
-#                         actions and running a real terraform apply. Done for
-#                         aws_s3_bucket only.
+#                         actions and running a real terraform apply.
 #
-# That exercise found the original aws_s3_bucket entry under-reported by 14
-# actions, which is the dangerous direction: it would have reported "allowed"
-# for an apply that cannot succeed. Assume the remaining draft entries in this
-# file are wrong the same way until someone repeats the test for them.
+# Every entry in this file that was measured had been wrong, and always in the
+# dangerous direction. aws_s3_bucket under-reported by 14 actions; each
+# sub-resource entry omitted exactly one read-back. The predictor was the same
+# every time: an entry with no read_actions. Terraform reads every resource back
+# after writing it, so an empty read set nearly always means nobody checked.
 #
 # Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
 
@@ -93,11 +95,18 @@ resources:
   - type: aws_s3_bucket_policy
     service: s3
     status: draft
+    # Create derived by the harness 2026-09-25; update and delete were not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes:
       BucketName: bucket
     resource_policy_capable: [create, update, delete]
+    # DERIVED 2026-09-25 and MISSING before. The entry declared no
+    # read_actions, which has now predicted an under-report nine times out
+    # of nine: Terraform reads every resource back after writing it.
+    read_actions:
+      - s3:GetBucketPolicy
     operations:
       create:
         - s3:PutBucketPolicy
@@ -105,10 +114,21 @@ resources:
         - s3:PutBucketPolicy
       delete:
         - s3:DeleteBucketPolicy
+    notes: >-
+      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
+      sufficiency proven. The entry omitted s3:GetBucketPolicy, and was
+      therefore wrong in the dangerous direction — it would have reported
+      "allowed" for a deploy that cannot succeed.
+
+      Update and delete are unverified. The harness tears down with operator
+      credentials so that teardown cannot fail for want of the permission
+      being searched for, which means delete is never exercised.
 
   - type: aws_s3_bucket_versioning
     service: s3
     status: draft
+    # Create derived by the harness 2026-09-25; update and delete were not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes:
@@ -117,6 +137,11 @@ resources:
     # exists, so that bucket's own policy can deny PutBucketVersioning
     # regardless of what the identity policy allows.
     resource_policy_capable: [create, update, delete]
+    # DERIVED 2026-09-25 and MISSING before. The entry declared no
+    # read_actions, which has now predicted an under-report nine times out
+    # of nine: Terraform reads every resource back after writing it.
+    read_actions:
+      - s3:GetBucketVersioning
     operations:
       create:
         - s3:PutBucketVersioning
@@ -125,18 +150,38 @@ resources:
       delete:
         - s3:PutBucketVersioning
     notes: >-
+      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
+      sufficiency proven. The entry omitted s3:GetBucketVersioning, and was
+      therefore wrong in the dangerous direction — it would have reported
+      "allowed" for a deploy that cannot succeed.
+
+      Minimality came back PARTIAL rather than proven: one removal produced a
+      non-denial outcome, so that action is kept on weaker evidence than a clean
+      AccessDenied.
+
+      Update and delete are unverified. The harness tears down with operator
+      credentials so that teardown cannot fail for want of the permission
+      being searched for, which means delete is never exercised.
+
       Destroying this resource does not remove versioning; Terraform suspends
       it, which is still a PutBucketVersioning call.
 
   - type: aws_s3_bucket_public_access_block
     service: s3
     status: draft
+    # Create derived by the harness 2026-09-25; update and delete were not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes:
       BucketName: bucket
     # Acts on an existing bucket, whose own policy can deny this.
     resource_policy_capable: [create, update, delete]
+    # DERIVED 2026-09-25 and MISSING before. The entry declared no
+    # read_actions, which has now predicted an under-report nine times out
+    # of nine: Terraform reads every resource back after writing it.
+    read_actions:
+      - s3:GetBucketPublicAccessBlock
     operations:
       create:
         - s3:PutBucketPublicAccessBlock
@@ -144,10 +189,21 @@ resources:
         - s3:PutBucketPublicAccessBlock
       delete:
         - s3:PutBucketPublicAccessBlock
+    notes: >-
+      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
+      sufficiency proven. The entry omitted s3:GetBucketPublicAccessBlock, and was
+      therefore wrong in the dangerous direction — it would have reported
+      "allowed" for a deploy that cannot succeed.
+
+      Update and delete are unverified. The harness tears down with operator
+      credentials so that teardown cannot fail for want of the permission
+      being searched for, which means delete is never exercised.
 
   - type: aws_s3_bucket_server_side_encryption_configuration
     service: s3
     status: draft
+    # Create derived by the harness 2026-09-25; update and delete were not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes:
@@ -155,6 +211,11 @@ resources:
     # Acts on an existing bucket, whose own policy can deny this. The KMS key
     # policy noted below is a second, separate unevaluated resource policy.
     resource_policy_capable: [create, update, delete]
+    # DERIVED 2026-09-25 and MISSING before. The entry declared no
+    # read_actions, which has now predicted an under-report nine times out
+    # of nine: Terraform reads every resource back after writing it.
+    read_actions:
+      - s3:GetEncryptionConfiguration
     operations:
       create:
         - s3:PutEncryptionConfiguration
@@ -163,6 +224,15 @@ resources:
       delete:
         - s3:PutEncryptionConfiguration
     notes: >-
+      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
+      sufficiency proven. The entry omitted s3:GetEncryptionConfiguration, and was
+      therefore wrong in the dangerous direction — it would have reported
+      "allowed" for a deploy that cannot succeed.
+
+      Update and delete are unverified. The harness tears down with operator
+      credentials so that teardown cannot fail for want of the permission
+      being searched for, which means delete is never exercised.
+
       The IAM action is s3:PutEncryptionConfiguration, NOT s3:PutBucketEncryption
       — the API operation and the IAM action have different names here. AWS's
       validator confirms the latter does not exist. When the configuration names

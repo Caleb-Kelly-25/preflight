@@ -6,16 +6,19 @@
 # (accessanalyzer:ValidatePolicy), which is authoritative for action names.
 #
 # An earlier version of this header also claimed the validator confirmed "every
-# arn_format matches the resource type its actions accept". It does not.
-# Measured 2026-09-25: the validator checks NAMES ONLY and reports nothing at
-# all for an action scoped to a resource type it cannot apply to. The
-# arn_formats below are therefore unverified, and the way to check one is the
-# "Resource types" column of the action table in the Service Authorization
-# Reference. See mappings/README.md.
+# arn_format matches the resource type its actions accept". It does not — the
+# validator checks NAMES ONLY and reports nothing at all for an action scoped to
+# a resource type it cannot apply to. The arn_formats here are now checked
+# separately by `go run ./cmd/arncheck`, against AWS's machine-readable service
+# reference, which CI runs on every pull request.
 #
 # COMPLETENESS is the dimension that matters, because a missing action produces
-# a false "allowed" for a deploy that will fail. Three entries here have had
-# their create path derived empirically; every other operation is reasoning.
+# a false "allowed" for a deploy that will fail. Every entry in this file whose
+# create path has been derived was found to be WRONG, always in that direction:
+# aws_iam_role missing 5, aws_iam_policy 2, aws_iam_instance_profile 2,
+# aws_iam_role_policy 1, aws_iam_role_policy_attachment 1. Update paths remain
+# reasoning throughout — they are the hardest to derive, because the required
+# actions depend on which attributes changed.
 #
 # Known gaps, listed rather than guessed at:
 #   - Deleting a role that still has inline policies or attachments requires
@@ -159,10 +162,17 @@ resources:
   - type: aws_iam_role_policy_attachment
     service: iam
     status: draft
+    # Create derived by the harness 2026-09-25; update and delete were not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
     arn_attributes:
       RoleName: role
+    # DERIVED 2026-09-25 and MISSING before. The entry declared no
+    # read_actions, which has now predicted an under-report nine times out
+    # of nine: Terraform reads every resource back after writing it.
+    read_actions:
+      - iam:ListAttachedRolePolicies
     operations:
       create:
         - iam:AttachRolePolicy
@@ -171,6 +181,15 @@ resources:
         - iam:DetachRolePolicy
       delete:
         - iam:DetachRolePolicy
+    notes: >-
+      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
+      sufficiency proven. The entry omitted iam:ListAttachedRolePolicies, and was
+      therefore wrong in the dangerous direction — it would have reported
+      "allowed" for a deploy that cannot succeed.
+
+      Update and delete are unverified. The harness tears down with operator
+      credentials so that teardown cannot fail for want of the permission
+      being searched for, which means delete is never exercised.
 
   - type: aws_iam_role_policy
     service: iam
@@ -211,10 +230,17 @@ resources:
   - type: aws_iam_instance_profile
     service: iam
     status: draft
+    # Create derived by the harness 2026-09-25; update and delete were not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:instance-profile/${ProfileName}"
     arn_attributes:
       ProfileName: name
+    # DERIVED 2026-09-25 and missing before. iam:GetRole is NOT here — it is
+    # authorised against the role rather than the profile, so it sits under
+    # `references`; see the comment there.
+    read_actions:
+      - iam:GetInstanceProfile
     operations:
       create:
         - iam:CreateInstanceProfile
@@ -244,6 +270,18 @@ resources:
     # `role` holds a role NAME here, not an ARN, hence arn_format.
     references:
       - action: iam:PassRole
+        arn_from: role
+        arn_format: "arn:${Partition}:iam::${Account}:role/${Name}"
+        operations: [create, update]
+        when: { attribute_set: role }
+
+      # DERIVED 2026-09-25, and it belongs HERE rather than in read_actions.
+      # The provider reads the role back, so iam:GetRole is genuinely required —
+      # but it is authorised against the ROLE, not against the instance profile.
+      # Putting it in read_actions would scope it to this entry's own ARN, which
+      # cmd/arncheck flags as a mismatch and which would report a policy
+      # correctly scoped to the role as a missing permission.
+      - action: iam:GetRole
         arn_from: role
         arn_format: "arn:${Partition}:iam::${Account}:role/${Name}"
         operations: [create, update]

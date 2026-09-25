@@ -170,7 +170,48 @@ func seedActions(resourceType string, op mapping.Operation) ([]string, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("%s has no %s operation mapped", resourceType, op)
 	}
-	return append(out, res.ReadActions...), nil
+	out = append(out, res.ReadActions...)
+
+	// Reference actions must be granted too, or the apply cannot succeed and the
+	// run measures nothing.
+	//
+	// Omitting them was a real bug, found by using this: deriving
+	// aws_iam_instance_profile without iam:PassRole did not fail cleanly, it
+	// HUNG — the provider retried until the budget expired, so the run reported
+	// "stalled, no attributable denial" rather than naming the missing
+	// permission. Any entry with references was underivable.
+	//
+	// The grant is unscoped here (Resource: "*"), so a reference needs nothing
+	// special beyond being present.
+	for _, ref := range res.References {
+		if ref.AppliesTo(op) {
+			out = append(out, ref.Action)
+		}
+	}
+	return out, nil
+}
+
+// referenceActions is the subset of a seed that came from `references`. The
+// report names them, because a derived action list is applied to the YAML by
+// hand and these belong under `references` — scoped to another resource's ARN —
+// rather than under `operations`. Moving one into operations would check it
+// against the wrong resource.
+func referenceActions(resourceType string, op mapping.Operation) map[string]bool {
+	out := map[string]bool{}
+	db, err := mapping.Load(mappings.FS)
+	if err != nil {
+		return out
+	}
+	res, ok := db.Lookup(resourceType)
+	if !ok {
+		return out
+	}
+	for _, ref := range res.References {
+		if ref.AppliesTo(op) {
+			out[ref.Action] = true
+		}
+	}
+	return out
 }
 
 func createScratchRole(ctx context.Context, cfg aws.Config, name, account string) (string, error) {
