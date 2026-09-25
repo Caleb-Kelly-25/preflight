@@ -281,16 +281,30 @@ resources:
     service: lambda
     status: draft
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
-    # Lambda has two ARN shapes here: `layer:${LayerName}` (the layer, which
-    # PublishLayerVersion is authorised against) and `layer:${LayerName}:${Ver}`
-    # (the version, which DeleteLayerVersion and GetLayerVersion take).
-    # arn_format holds one. The unversioned form is used because layer_name is
-    # known at plan time while the version number is assigned by AWS — so this
-    # is the only one of the two that can ever resolve on a create. See notes
-    # for what that costs on delete.
-    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:layer:${LayerName}"
+    # CORRECTED 2026-09-25, after the arn_format check measured it against AWS's
+    # machine-readable service reference.
+    #
+    # Lambda has two ARN shapes here, and this entry needs both:
+    #   lambda:PublishLayerVersion  -> layer         arn:…:layer:${LayerName}
+    #   lambda:DeleteLayerVersion   -> layerVersion  arn:…:layer:${LayerName}:${Version}
+    #   lambda:GetLayerVersion      -> layerVersion
+    #
+    # The entry previously used the UNVERSIONED shape, because layer_name is
+    # known at plan time while the version is assigned by AWS. That was the
+    # dangerous choice: the unversioned ARN is BROADER than what delete and get
+    # are authorised against, so a policy naming `layer:my-layer` would have
+    # allowed our query while the real call against `layer:my-layer:3` was
+    # denied — a false "allowed" for a deploy that cannot succeed.
+    #
+    # The versioned shape is used instead, and deliberately cannot resolve: the
+    # version is unknown until apply, so BuildARN degrades to "*" and the
+    # finding carries the arn_not_resolvable caveat. That loses scoping, which
+    # this entry never really had, and in exchange it cannot produce a false
+    # pass. An unresolvable ARN is an honest "not checked"; a wrong one is not.
+    arn_format: "arn:${Partition}:lambda:${Region}:${Account}:layer:${LayerName}:${LayerVersion}"
     arn_attributes:
       LayerName: layer_name
+      LayerVersion: version
     # A layer version can carry a permission policy (AddLayerVersionPermission).
     # On create the version does not exist yet, so nothing can deny it; on
     # delete the read-back of an existing version can be.

@@ -189,6 +189,29 @@ jobs:
               f"VERSION must be X.Y.Z with an optional pre-release suffix, got {version!r}"
           PY
 
+  # Checks that every mapped action can actually authorize against the resource
+  # type its entry's arn_format names. accessanalyzer:ValidatePolicy cannot do
+  # this — it validates action NAMES only — so without this job every arn_format
+  # in the database is unverified, and a too-broad one produces a false
+  # "allowed" rather than a visible false positive.
+  #
+  # It reads a public AWS endpoint and needs no credentials. It is deliberately
+  # NOT part of `go test`, which must run offline.
+  arn-scoping:
+    name: arn_format scoping
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # No --strict: a mismatch fails, but an unreachable endpoint does not.
+      # A job that reddens the build because a third party had an outage is a
+      # job people learn to route around, and this repository already treats a
+      # false alarm as a real cost.
+      - run: go run ./cmd/arncheck
+
   # The mapping database is the product's credibility. A structurally broken
   # entry silently reduces coverage in the field, so it gets its own visible
   # check rather than hiding inside the general test job.
