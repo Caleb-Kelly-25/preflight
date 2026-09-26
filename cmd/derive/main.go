@@ -393,6 +393,26 @@ func createScratchRole(ctx context.Context, cfg aws.Config, name, account string
 	return aws.ToString(out.Role.Arn), nil
 }
 
+// claimsOperation reports whether the shipped entry already claims this operation
+// as verified. A load failure answers "yes" so that a broken database produces no
+// advice rather than misleading advice; the mapping tests are what catch that.
+func claimsOperation(resourceType, op string) bool {
+	db, err := mapping.Load(mappings.FS)
+	if err != nil {
+		return true
+	}
+	res, ok := db.Lookup(resourceType)
+	if !ok {
+		return true
+	}
+	for _, claimed := range res.VerifiedOps() {
+		if claimed == mapping.Operation(op) {
+			return true
+		}
+	}
+	return false
+}
+
 func report(w *os.File, resourceType, op string, res derive.Result) {
 	fmt.Fprintf(w, "\n=== %s %s ===\n", resourceType, op)
 	fmt.Fprintf(w, "sufficiency: %s   minimality: %s   attempts: %d\n\n",
