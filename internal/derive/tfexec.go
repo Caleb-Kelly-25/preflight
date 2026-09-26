@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -31,12 +32,38 @@ type TerraformApplier struct {
 	Region string
 	// DestroyBudget bounds teardown independently of the apply budget.
 	DestroyBudget time.Duration
+
+	// StateDir holds Terraform state, deliberately OUTSIDE the fixture
+	// directory. Two reasons, one of which cost a whole derivation run.
+	//
+	// The one that bit: derivefixtures/ lives under a synced folder on this
+	// machine, and OneDrive reads terraform.tfstate while Terraform is writing
+	// it. Terraform then fails with "the process cannot access the file because
+	// another process has locked a portion of the file" -- a teardown failure
+	// with nothing to do with AWS, which aborts the run and discards the
+	// measurement.
+	//
+	// The other: state outside the working tree survives the working tree, so a
+	// crashed run can still be torn down.
+	//
+	// Empty means the fixture directory, which is the old behaviour.
+	StateDir string
+}
+
+// stateArgs points Terraform at StateDir when one is set. Passed to apply and
+// destroy alike: a destroy that cannot see the state cannot tear anything down.
+func (t *TerraformApplier) stateArgs() []string {
+	if t.StateDir == "" {
+		return nil
+	}
+	return []string{"-state=" + filepath.Join(t.StateDir, "terraform.tfstate")}
 }
 
 // Apply runs terraform apply under the scratch role, classifying the result.
 func (t *TerraformApplier) Apply(ctx context.Context, budget time.Duration) Outcome {
 	start := time.Now()
-	out, timedOut, err := t.run(ctx, budget, t.applyEnv(), "apply", "-auto-approve", "-input=false", "-no-color")
+	args := append([]string{"apply", "-auto-approve", "-input=false", "-no-color"}, t.stateArgs()...)
+	out, timedOut, err := t.run(ctx, budget, t.applyEnv(), args...)
 	elapsed := time.Since(start)
 
 	if timedOut {
@@ -73,7 +100,8 @@ func (t *TerraformApplier) Destroy(ctx context.Context) error {
 	if budget <= 0 {
 		budget = 10 * time.Minute
 	}
-	out, timedOut, err := t.run(ctx, budget, t.operatorEnv(), "destroy", "-auto-approve", "-input=false", "-no-color")
+	dargs := append([]string{"destroy", "-auto-approve", "-input=false", "-no-color"}, t.stateArgs()...)
+	out, timedOut, err := t.run(ctx, budget, t.operatorEnv(), dargs...)
 	if err == nil && !timedOut {
 		return nil
 	}
@@ -87,8 +115,7 @@ func (t *TerraformApplier) Destroy(ctx context.Context) error {
 			"force-unlock", "-force", id); unlockErr != nil {
 			return fmt.Errorf("destroy blocked by state lock %s and force-unlock failed: %w", id, unlockErr)
 		}
-		out, timedOut, err = t.run(ctx, budget, t.operatorEnv(),
-			"destroy", "-auto-approve", "-input=false", "-no-color")
+		out, timedOut, err = t.run(ctx, budget, t.operatorEnv(), dargs...)
 		if err == nil && !timedOut {
 			return nil
 		}

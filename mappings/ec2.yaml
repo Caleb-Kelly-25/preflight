@@ -3,12 +3,17 @@
 # VERIFICATION STATUS — see the per-entry status fields.
 #
 # Two dimensions must hold before an entry is `verified`; see README.md.
-#   1. Names            - checked via accessanalyzer:ValidatePolicy. That
-#                         validates NAMES ONLY; it does not check that an action
-#                         can apply to the ARN it is scoped to, so the
-#                         arn_formats below remain unverified.
+#   1. Names            - checked via accessanalyzer:ValidatePolicy, which
+#                         validates NAMES ONLY. The arn_formats are checked
+#                         separately by `go run ./cmd/arncheck` against AWS's
+#                         machine-readable service reference; CI runs it.
 #   2. Completeness     - proven only by granting a role exactly the mapped
 #                         actions and running a real terraform apply.
+#
+# The `when` gates in this file are the only ones in the database measured in
+# both directions, via the __minimal fixture variants. A gate is the one schema
+# feature that can produce a false pass, and one here WAS one:
+# ec2:RevokeSecurityGroupEgress was gated on `egress` and is required without it.
 #
 # A note specific to this service. Most ec2:Describe* actions do NOT support
 # resource-level permissions: a policy must grant them on "*". That is fine for
@@ -110,9 +115,6 @@ resources:
       "*" and any denial is inconclusive. That is inherent to VPCs rather than a
       gap in this entry: the identifier is assigned by AWS.
 
-      ec2:CreateTags is gated on tags being set, which was measured only in the
-      tagged direction — an untagged VPC was not tested.
-
   - type: aws_subnet
     service: ec2
     status: draft
@@ -172,6 +174,8 @@ resources:
     operations:
       create:
         - ec2:CreateSecurityGroup
+        # GATE MEASURED both directions 2026-09-25: required with tags,
+        # proven surplus without them via the __minimal fixture.
         - action: ec2:CreateTags
           when: { attribute_set: tags }
         # A security group is created empty; inline rules are separate calls.
@@ -179,10 +183,25 @@ resources:
           when: { attribute_set: ingress }
         - action: ec2:AuthorizeSecurityGroupEgress
           when: { attribute_set: egress }
-        # Terraform revokes the default allow-all egress rule when the
-        # configuration specifies its own, which is a separate authorisation.
-        - action: ec2:RevokeSecurityGroupEgress
-          when: { attribute_set: egress }
+        # UNGATED, and this was a FALSE PASS until 2026-09-25.
+        #
+        # It was gated on `attribute_set: egress`, on the reasoning that
+        # Terraform revokes the default allow-all egress rule only when the
+        # configuration supplies its own. Measuring the minimal fixture — no
+        # tags, no ingress, no egress — disproved that: the action is
+        # load-bearing with NO egress block at all.
+        #
+        # The reason is that the provider manages egress EXHAUSTIVELY. An absent
+        # egress block does not mean "leave the default alone", it means "there
+        # should be no egress rules" — so Terraform revokes the allow-all rule
+        # AWS attaches to every new group. The permission is needed when egress
+        # is absent for the same reason it is needed when egress is present.
+        #
+        # Before the fix, a security group with no egress block was told it did
+        # not need this, and the apply would then fail. That is the exact failure
+        # this tool exists to prevent, and no amount of reading the provider docs
+        # would have found it.
+        - ec2:RevokeSecurityGroupEgress
       update:
         - action: ec2:AuthorizeSecurityGroupIngress
           when: { attribute_changed: [ingress] }

@@ -64,6 +64,8 @@ resources:
         # The mirror of the IAM case: CreateBucket does NOT accept tags, so a
         # tagged bucket needs a second, separately-authorised call. An untagged
         # one needs neither.
+        # GATE MEASURED both directions 2026-09-25: a role holding the other
+        # 16 actions but NOT this one applies an untagged bucket successfully.
         - action: s3:PutBucketTagging
           when: { attribute_set: tags }
       update:

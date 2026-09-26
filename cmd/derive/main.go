@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -83,10 +84,35 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 
 	grantor := derive.NewAWSGrantor(cfg, roleName, roleARN)
+	// The fixture is COPIED to a temp directory and run from there, rather than
+	// run in place. Terraform writes state, a .terraform provider cache and lock
+	// files into its working directory, and on this machine derivefixtures/ sits
+	// under a synced folder — the sync client held terraform.tfstate open, which
+	// broke `terraform init` on a later run and could not be cleared even with a
+	// force delete. Working in a copy means nothing Terraform writes ever lands
+	// in the repository, so a fixture cannot be poisoned by a previous run.
+	workDir, err := copyFixture(*fixtureDir)
+	if err != nil {
+		return fmt.Errorf("staging the fixture: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+
+	// State is kept outside the working directory too. On this machine
+	// derivefixtures/ sits under a synced folder, and the sync client reading
+	// terraform.tfstate mid-write produced a teardown failure that aborted a
+	// run and discarded its measurement -- a failure with nothing to do with
+	// AWS. It also means a crashed run can still be torn down.
+	stateDir, err := os.MkdirTemp("", "preflight-derive-state-")
+	if err != nil {
+		return fmt.Errorf("creating state directory: %w", err)
+	}
+	defer os.RemoveAll(stateDir)
+
 	applier := &derive.TerraformApplier{
-		Dir:    *fixtureDir,
-		Region: *region,
-		Creds:  func() derive.Credentials { return grantor.Latest },
+		Dir:      workDir,
+		Region:   *region,
+		StateDir: stateDir,
+		Creds:    func() derive.Credentials { return grantor.Latest },
 	}
 
 	// Teardown runs on every exit path, including Ctrl-C, on a context that is
@@ -126,6 +152,45 @@ func run(args []string, stdout, stderr *os.File) error {
 		return fmt.Errorf("teardown failed during the run; check for surviving resources")
 	}
 	return nil
+}
+
+// copyFixture stages a fixture in a temp directory. Only the .tf and .hcl files
+// are copied: a stale terraform.tfstate carried across would make Terraform
+// believe resources exist that do not, and the whole point is a clean run.
+func copyFixture(src string) (string, error) {
+	dst, err := os.MkdirTemp("", "preflight-derive-fixture-")
+	if err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return "", err
+	}
+	var staged int
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if ext := filepath.Ext(name); ext != ".tf" && ext != ".hcl" && ext != ".json" {
+			continue
+		}
+		if strings.HasPrefix(name, "terraform.tfstate") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(src, name))
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(dst, name), b, 0o600); err != nil {
+			return "", err
+		}
+		staged++
+	}
+	if staged == 0 {
+		return "", fmt.Errorf("%s contains no .tf files", src)
+	}
+	return dst, nil
 }
 
 // guard enforces the three checks. The account check compares against a LIVE
