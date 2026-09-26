@@ -153,8 +153,18 @@ func (t *TerraformApplier) run(ctx context.Context, budget time.Duration, env []
 	cmd := exec.CommandContext(runCtx, "terraform", args...)
 	cmd.Dir = t.Dir
 	cmd.Env = env
-	// Terraform spawns provider plugins that hold the state lock. WaitDelay
-	// gives them a moment to die with the parent rather than being orphaned.
+
+	// Terraform spawns provider plugins as children, and those children hold the
+	// state file open. CommandContext's default kill signals only terraform
+	// itself, so a stalled apply leaves a plugin running and the NEXT destroy
+	// fails on a locked state file — a teardown failure with nothing to do with
+	// AWS, which aborts the run and discards the measurement.
+	//
+	// Cancel replaces that default with a whole-tree kill. See proc_windows.go
+	// and proc_unix.go. WaitDelay then bounds how long Wait will linger on
+	// inherited pipes after the tree is gone.
+	configureProcessGroup(cmd)
+	cmd.Cancel = func() error { return killProcessTree(cmd) }
 	cmd.WaitDelay = 10 * time.Second
 
 	out, err := cmd.CombinedOutput()

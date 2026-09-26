@@ -23,10 +23,15 @@ terraform {
   }
 }
 
+variable "account_id" {
+  description = "Account the fixture runs in. Supplied by the harness as TF_VAR_account_id, so no account number is ever written into this repository."
+  type        = string
+}
+
 provider "aws" {
   # Deliberately no default_tags. See above.
 }
 
 resource "aws_s3_bucket" "probe" {
-  bucket = "preflight-derive-min-000000000000"
+  bucket = "preflight-derive-min-${var.account_id}"
 }

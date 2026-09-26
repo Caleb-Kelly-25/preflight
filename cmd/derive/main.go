@@ -70,6 +70,18 @@ func run(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 
+	// Fixtures take the account as a Terraform variable rather than hardcoding
+	// it. Two reasons: an account number in a tracked file is information
+	// disclosure in a repository destined to be public, and a hardcoded one makes
+	// every fixture unusable by anyone but its author — which matters, because
+	// mappings/README.md asks outside contributors to derive entries.
+	//
+	// Set on the process so BOTH the scratch-role apply and the operator destroy
+	// inherit it; they build their environments separately.
+	if err := os.Setenv("TF_VAR_account_id", account); err != nil {
+		return fmt.Errorf("setting TF_VAR_account_id: %w", err)
+	}
+
 	seed, err := seedActions(*resourceType, mapping.Operation(*operation))
 	if err != nil {
 		return err

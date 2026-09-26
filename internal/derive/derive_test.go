@@ -150,20 +150,37 @@ func TestDeriveRecoversTheRealSet(t *testing.T) {
 }
 
 // The hang is the failure mode a naive harness gets wrong, so it gets its own
-// test: a stall during minimisation is positive evidence, not an error.
-func TestHangIsEvidenceNotFailure(t *testing.T) {
+// test. A stall is BOTH positive evidence about the removed action AND a reason
+// to stop, because ending the stall means killing the apply.
+func TestHangIsEvidenceAndStopsTheRun(t *testing.T) {
 	truth := []string{"s3:CreateBucket", "s3:ListBucket"}
 	g := &fakeGrantor{failOn: -1}
 	a := &fakeApplier{grantor: g, required: truth, hangsOn: "s3:ListBucket"}
 	d := &derive.Deriver{Grantor: g, Applier: a, MaxAttempts: 20, AttemptBudget: time.Second}
 
+	// A stall records its evidence AND stops the run. Both halves matter.
+	//
+	// The evidence is sound: the apply that stalled proves the removed action was
+	// load-bearing, which is the finding. But the apply was KILLED to end the
+	// stall, so state no longer describes reality — Terraform may have created
+	// the resource without recording it, in which case destroy finds nothing,
+	// reports success, and leaves it behind.
+	//
+	// Continuing past that measures the next action against a dirty account while
+	// believing it is clean. That really happened: the attempt after
+	// s3:ListBucket's stall blamed an action that a separate targeted experiment
+	// showed was droppable, entirely because of a leftover bucket.
 	res, err := d.Derive(context.Background(), truth)
-	if err != nil {
-		t.Fatalf("Derive: %v", err)
+	if err == nil {
+		t.Fatal("a stall did not stop the run; later attempts would measure against unknown state")
 	}
+	if !res.Dirty {
+		t.Error("Result.Dirty is false after a stall killed an apply")
+	}
+
 	ev, ok := res.Evidence["s3:ListBucket"]
 	if !ok {
-		t.Fatal("no evidence recorded for s3:ListBucket")
+		t.Fatal("the stall's own evidence was discarded; it is the finding")
 	}
 	if ev.Kind != derive.OutcomeStalled {
 		t.Errorf("evidence kind = %s, want stalled", ev.Kind)
@@ -171,6 +188,9 @@ func TestHangIsEvidenceNotFailure(t *testing.T) {
 	// Weaker evidence than a clean denial, and the result must say so.
 	if res.Minimal == derive.ConfidenceProven {
 		t.Error("minimality reported as proven despite resting on a hang")
+	}
+	if len(res.Warnings) == 0 {
+		t.Error("no warning explains why the run stopped or how to resume")
 	}
 }
 

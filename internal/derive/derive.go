@@ -193,6 +193,29 @@ func (d *Deriver) Derive(ctx context.Context, seed []string) (Result, error) {
 		if out.Kind != OutcomeDenied {
 			res.Minimal = ConfidencePartial
 		}
+
+		// A stall means the apply was KILLED mid-flight, so state no longer
+		// describes reality: Terraform may have created the resource and never
+		// recorded it. `terraform destroy` then finds nothing, reports success,
+		// and leaves the resource behind — so the next attempt measures against
+		// a dirty account while believing it is clean.
+		//
+		// That is not hypothetical. Removing s3:ListBucket hangs, and the attempt
+		// after it reported a non-IAM failure that a separate targeted experiment
+		// disproved: the action it blamed was in fact droppable. The bogus result
+		// came entirely from the leftover bucket.
+		//
+		// The evidence from THIS attempt is sound — the stall itself is the
+		// finding — so it is recorded above before stopping.
+		if out.Kind == OutcomeStalled {
+			res.Warnings = append(res.Warnings, fmt.Sprintf(
+				"%s: removing it stalled the apply, which was then killed. State no longer "+
+					"describes reality, so minimisation stops here rather than measuring against "+
+					"an account that may still hold leftover resources. Sweep by tag and re-run "+
+					"to finish the remaining actions.", action))
+			res.Dirty = true
+			return res, errDirty
+		}
 	}
 
 	res.Sufficient = dedupeSorted(current)

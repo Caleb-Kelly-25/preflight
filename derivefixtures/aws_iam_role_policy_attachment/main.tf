@@ -21,9 +21,14 @@ terraform {
   }
 }
 
+variable "account_id" {
+  description = "Account the fixture runs in. Supplied by the harness as TF_VAR_account_id, so no account number is ever written into this repository."
+  type        = string
+}
+
 provider "aws" {}
 
 resource "aws_iam_role_policy_attachment" "probe" {
   role       = "preflight-derive-support"
-  policy_arn = "arn:aws:iam::000000000000:policy/preflight-derive-support-policy"
+  policy_arn = "arn:aws:iam::${var.account_id}:policy/preflight-derive-support-policy"
 }

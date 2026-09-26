@@ -98,8 +98,18 @@ resolution · `internal/mapping` mapping DB + ARN templating · `internal/engine
 classification · `internal/simulate` the AWS client, batching and throttling ·
 `internal/derive` the derivation loop · `internal/finding` confidence types ·
 `internal/hclsrc` resource address → `.tf` file and line, for SARIF ·
-`internal/report` output · `mappings/` the database itself ·
-`derivefixtures/` Terraform fixtures the derivation runs against.
+`internal/awsref` + `cmd/arncheck` verify every `arn_format` against AWS's
+machine-readable service reference · `internal/report` output · `mappings/` the
+database itself · `derivefixtures/` Terraform fixtures the derivation runs
+against.
+
+Three commands, and only the first ships:
+
+| Command | Ships? | Needs AWS? | Notes |
+|---|---|---|---|
+| `cmd/preflight` | yes | credentials | the product |
+| `cmd/arncheck` | no | no credentials, but network | run by CI on every PR |
+| `cmd/derive` | no | credentials, CREATES resources | `awsderive` tag, three guards |
 
 `mappings/` is at the repo root, not under `internal/`, because the content is a
 community asset. Do not move it.
@@ -235,6 +245,40 @@ build tag, `PREFLIGHT_DERIVE_ACCOUNT` checked against a **live**
   that produced it.
 - The harness emits a **report**, never an edited YAML. `verified` is a claim a
   person makes, and the PR should say how completeness was established.
+
+### Things the harness learned the hard way
+
+Each of these was a real defect that silently corrupted or aborted a run. Do not
+undo them without understanding what they cost.
+
+- **The seed includes `references`.** It did not, so any entry needing
+  `iam:PassRole` could not be derived — the apply hung instead of failing, and
+  the run reported "stalled, no attributable denial".
+- **A killed apply kills the whole process tree** (`proc_windows.go`,
+  `proc_unix.go`). Terraform's provider plugins hold the state file; killing only
+  the parent orphaned one, and the next teardown failed on a locked file.
+- **The fixture is staged into a temp copy and state lives outside it.**
+  `derivefixtures/` sits under a synced folder here, and the sync client held
+  `terraform.tfstate` open — unbreakably, even with a force delete.
+- **A stall stops the run.** Ending a stall means killing the apply, so state no
+  longer describes reality: Terraform may have created a resource without
+  recording it, in which case destroy finds nothing, reports success, and leaves
+  it behind. Continuing produced a confident wrong answer about the *next*
+  action. Sweep and re-run to finish.
+- **A failed teardown stops the run too**, for the same reason, and exits
+  non-zero.
+- **Fixtures take the account as `TF_VAR_account_id`**, never hardcoded. An
+  account number in a tracked file is information disclosure in a repository
+  meant to go public, and a hardcoded one makes the fixture unusable by any
+  contributor.
+
+### Measuring a `when` gate
+
+Derive the type **twice** — from the maximal fixture and from
+`<type>__minimal` — and the difference between the derived sets is the gate. Two
+traps: a provider `default_tags` block silently tags a "minimal" fixture, and
+`attribute_set` reads a `false` boolean as unset, so never gate on a boolean
+without checking its default.
 
 ## The correction most likely to be reintroduced
 

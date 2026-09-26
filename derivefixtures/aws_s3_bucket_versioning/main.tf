@@ -3,7 +3,7 @@
 # The resource it acts on is NOT created here. It is a support resource created
 # out of band and referenced by name:
 #
-#   s3 bucket preflight-derive-support-000000000000
+#   s3 bucket preflight-derive-support-<account>
 #
 # That is a correctness requirement, not convenience. A fixture that created its
 # own support resource would need that resource's actions too, and the
@@ -21,10 +21,15 @@ terraform {
   }
 }
 
+variable "account_id" {
+  description = "Account the fixture runs in. Supplied by the harness as TF_VAR_account_id, so no account number is ever written into this repository."
+  type        = string
+}
+
 provider "aws" {}
 
 resource "aws_s3_bucket_versioning" "probe" {
-  bucket = "preflight-derive-support-000000000000"
+  bucket = "preflight-derive-support-${var.account_id}"
   versioning_configuration {
     status = "Enabled"
   }
