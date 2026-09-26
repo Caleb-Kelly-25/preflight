@@ -127,6 +127,32 @@ func run(args []string, stdout, stderr *os.File) error {
 		Creds:    func() derive.Credentials { return grantor.Latest },
 	}
 
+	// A create acts on nothing, so it needs no before-state and the fixture is
+	// applied as written. An update does: the resource has to exist, created with
+	// operator credentials so its creation is not part of what gets measured.
+	//
+	// The convention is a `phase` variable — 1 is the before shape, 2 is the
+	// after. Requiring it EXPLICITLY, and refusing to run without it, is the
+	// point: a fixture with no phase variable applies identically in both
+	// phases, the scratch role would perform the create, and the run would
+	// report the create path under the name "update". A wrong mapping presented
+	// as measured is the one failure this whole tool exists to prevent, so the
+	// driver would rather not run at all.
+	if *operation != "create" {
+		phased, err := fixtureHasPhase(workDir)
+		if err != nil {
+			return fmt.Errorf("inspecting the fixture: %w", err)
+		}
+		if !phased {
+			return fmt.Errorf("deriving %s needs a two-phase fixture: %s declares no `variable \"phase\"`, "+
+				"so phase 1 and phase 2 would apply the same configuration and the measurement would be "+
+				"the create path mislabelled as %s. See derivefixtures/README.md",
+				*operation, *fixtureDir, *operation)
+		}
+		applier.SetupVars = []string{"-var", "phase=1"}
+		applier.ApplyVars = []string{"-var", "phase=2"}
+	}
+
 	// Teardown runs on every exit path, including Ctrl-C, on a context that is
 	// not the cancelled one.
 	defer func() {
@@ -164,6 +190,35 @@ func run(args []string, stdout, stderr *os.File) error {
 		return fmt.Errorf("teardown failed during the run; check for surviving resources")
 	}
 	return nil
+}
+
+// fixtureHasPhase reports whether the fixture declares the `phase` variable that
+// a two-phase (before/after) derivation requires.
+//
+// This is a deliberate string match rather than a full HCL parse. The driver only
+// needs to know whether the convention was followed, the fixtures are
+// hand-written and a dozen lines long, and pulling an HCL parser into a
+// maintainer tool for one question is not worth the dependency. If a fixture ever
+// declares the variable in a way this misses, the run fails closed -- it refuses
+// to derive rather than deriving the wrong thing.
+func fixtureHasPhase(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".tf" {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return false, err
+		}
+		if strings.Contains(string(body), `variable "phase"`) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // copyFixture stages a fixture in a temp directory. Only the .tf and .hcl files

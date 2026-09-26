@@ -230,6 +230,7 @@ fixture, and removes actions one at a time to find which are load-bearing.
 
 ```
 make derive TYPE=aws_vpc FIXTURE=./derivefixtures/aws_vpc
+make derive TYPE=aws_iam_policy OPERATION=update   FIXTURE=./derivefixtures/aws_iam_policy__update
 ```
 
 Guarded three ways, because it creates real billable resources: the `awsderive`
@@ -240,11 +241,39 @@ build tag, `PREFLIGHT_DERIVE_ACCOUNT` checked against a **live**
   documented as costing zero with no blast radius, and that must stay true.
 - `internal/derive`'s loop is pure and unit-tested with fakes; only the
   `awsderive`-tagged files touch AWS or Terraform.
-- Fixtures live in `derivefixtures/<type>/`, and their `.terraform.lock.hcl` is
-  committed on purpose: a derived set is only valid for the provider version
-  that produced it.
+- Fixtures live in `derivefixtures/<type>/`. A derived set is only valid for the
+  provider version that produced it, so **the version is recorded in the entry's
+  `notes`** — that is the only place it is captured. `.gitignore` permits a
+  committed `.terraform.lock.hcl` per fixture and no fixture has one, because the
+  harness stages each fixture into a temp copy and Terraform writes the lock file
+  there. Pinning them properly would mean generating the lock outside the temp
+  copy; until then the notes are the record.
 - The harness emits a **report**, never an edited YAML. `verified` is a claim a
   person makes, and the PR should say how completeness was established.
+- **No delete path can be derived**, structurally: teardown always runs with
+  operator credentials, so a missing delete permission can never surface. Delete
+  paths marked verified were established some other way.
+
+### Deriving an update: the two-phase fixture
+
+An update acts on something, so the loop needs a "before" state — and that state
+must be created with **operator** credentials, or the run measures the create and
+the update together with no way to separate them. `Applier.Setup` does this, and
+it runs *before* `Grant` on every attempt (`TestSetupRunsBeforeEveryGrant` pins
+the ordering; it is the whole correctness argument).
+
+The convention is a `phase` variable: 1 is the before shape, applied as operator;
+2 is the change, applied by the scratch role. `cmd/derive` **refuses** a
+non-create operation against a fixture that declares no `phase` variable, because
+both phases would then apply the same config, the scratch role would perform the
+create, and the run would report the create path labelled "update".
+
+**Vary exactly one attribute per fixture.** An update path depends on which
+attribute changed, so a fixture changing three produces one set and no way to
+attribute any of it — and a branch nobody measured is a false pass. Check the
+provider docs for `ForceNew` first: a replace is a create plus a delete wearing
+an update's name. `aws_iam_policy` needed three fixtures and is the worked
+example.
 
 ### Things the harness learned the hard way
 
@@ -279,6 +308,14 @@ Derive the type **twice** — from the maximal fixture and from
 traps: a provider `default_tags` block silently tags a "minimal" fixture, and
 `attribute_set` reads a `false` boolean as unset, so never gate on a boolean
 without checking its default.
+
+**Any gate naming `tags` must also name `tags_all`.** `default_tags` merge into
+the computed `tags_all` and never touch `tags`, so a `default_tags`-only change
+left every tags gate evaluating false and dropping the tagging action — a false
+pass. Measured 2026-09-26; **51 gates across 11 services had it.** It was one
+pattern copied, not one entry's mistake, so the guard is
+`TestTagGatesAlsoNameTagsAll` rather than a note. Both `attribute_set` and
+`attribute_changed` take a bare name or a list, satisfied by any one of them.
 
 ## The correction most likely to be reintroduced
 

@@ -16,15 +16,21 @@
 # a false "allowed" for a deploy that will fail. Every entry in this file whose
 # create path has been derived was found to be WRONG, always in that direction:
 # aws_iam_role missing 5, aws_iam_policy 2, aws_iam_instance_profile 2,
-# aws_iam_role_policy 1, aws_iam_role_policy_attachment 1. Update paths remain
-# reasoning throughout — they are the hardest to derive, because the required
-# actions depend on which attributes changed.
+# aws_iam_role_policy 1, aws_iam_role_policy_attachment 1.
+#
+# aws_iam_policy's UPDATE path was derived 2026-09-26 and was wrong in the same
+# direction, three times over — see that entry's notes. Every other update path
+# here is still reasoning.
 #
 # Known gaps, listed rather than guessed at:
 #   - Deleting a role that still has inline policies or attachments requires
 #     removing them first; whether the provider does that itself is unresolved.
-#   - Update paths are unverified throughout. They are the hardest to derive,
-#     because the required actions depend on which attributes changed.
+#   - Every update path except aws_iam_policy's is unverified. They are the
+#     hardest to derive, because the required actions depend on which attributes
+#     changed, so each branch of each gate needs its own two-phase fixture.
+#   - No delete path can be derived by the harness at all: teardown always runs
+#     with operator credentials, so a missing delete permission can never
+#     surface. Delete paths marked verified were established by other means.
 #
 # Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
 
@@ -63,7 +69,7 @@ resources:
         # GATE MEASURED both directions 2026-09-25: an untagged role derives
         # to four actions and reports this one surplus.
         - action: iam:TagRole
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
       update:
         - action: iam:UpdateRoleDescription
           when: { attribute_changed: [description] }
@@ -76,9 +82,9 @@ resources:
         - action: iam:UpdateAssumeRolePolicy
           when: { attribute_changed: [assume_role_policy] }
         - action: iam:TagRole
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: iam:UntagRole
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - iam:DeleteRole
         - iam:ListInstanceProfilesForRole
@@ -117,8 +123,8 @@ resources:
   - type: aws_iam_policy
     service: iam
     status: draft
-    # Create derived by the harness 2026-09-25; update and delete were not.
-    verified_operations: [create]
+    # Create derived 2026-09-25, update 2026-09-26. Delete was not.
+    verified_operations: [create, update]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:policy/${PolicyName}"
     arn_attributes:
@@ -142,10 +148,36 @@ resources:
         # GATE MEASURED both directions 2026-09-25 (was reasoned by analogy
         # with iam:TagRole; now proven): an untagged policy reports it surplus.
         - action: iam:TagPolicy
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
+      # UPDATE DERIVED 2026-09-26 by three separate two-phase fixtures, because
+      # an update path depends on WHICH attribute changed and each branch of the
+      # gate needs its own measurement. See the notes for the numbers.
       update:
-        - iam:CreatePolicyVersion
-        - iam:DeletePolicyVersion
+        # Changing the document. iam:ListPolicyVersions was MISSING — the first
+        # update path ever measured, and wrong in the dangerous direction.
+        - action: iam:CreatePolicyVersion
+          when: { attribute_changed: [policy] }
+        - action: iam:ListPolicyVersions
+          when: { attribute_changed: [policy] }
+        # KEPT although minimisation proved it droppable, which is the first time
+        # a surplus finding has been deliberately ignored. AWS caps a managed
+        # policy at five versions and the provider prunes the oldest when it hits
+        # that cap; going from one version to two never reaches it, so no fixture
+        # that applies phase 2 once can exercise the pruning. Dropping it on
+        # this evidence would produce a false pass for any policy already updated
+        # five times, which is an ordinary policy, not an edge case.
+        - action: iam:DeletePolicyVersion
+          when: { attribute_changed: [policy] }
+        # Changing tags. BOTH were missing, and the entry listed nothing at all
+        # for a tags-only update: the engine would have reported such a plan as
+        # needing no tagging permission whatsoever.
+        #
+        # UntagPolicy over-reports when tags are only added; it is required when
+        # one is removed, and the plan cannot always distinguish the two cheaply.
+        - action: iam:TagPolicy
+          when: { attribute_changed: [tags, tags_all] }
+        - action: iam:UntagPolicy
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - iam:DeletePolicy
     notes: >-
@@ -158,10 +190,44 @@ resources:
       direction: it would have reported "allowed" for a deploy that cannot
       succeed.
 
-      Update and delete remain unverified. Terraform updates a managed policy by
-      creating a new version and prunes old ones at the five-version limit,
-      hence iam:DeletePolicyVersion on update — reasoned from provider
-      behaviour, not measured.
+      UPDATE DERIVED 2026-09-26 against AWS provider 6.63.0, by the harness's
+      new two-phase mode: phase 1 establishes the resource with operator
+      credentials, phase 2 applies the change under the scratch role, so what is
+      measured is the update alone and not the create as well.
+
+      Three fixtures were needed, because an update path depends on which
+      attribute changed and a branch nobody measured is a false pass:
+
+      aws_iam_policy__update (document changed) derived iam:CreatePolicyVersion,
+      iam:ListPolicyVersions, iam:GetPolicy, iam:GetPolicyVersion in 8 attempts,
+      sufficiency and minimality both proven. iam:ListPolicyVersions was MISSING
+      from this entry.
+
+      aws_iam_policy__update_tags (tag changed and tag removed) derived
+      iam:TagPolicy, iam:UntagPolicy plus the two reads, in 11 attempts. BOTH
+      were missing, and the update path listed nothing for tags at all — a plan
+      changing only tags would have been reported as needing no tagging
+      permission.
+
+      aws_iam_policy__update_default_tags (provider default_tags changed, the
+      resource's own tags untouched) derived iam:TagPolicy plus the two reads, in
+      9 attempts. That one is not really about this entry: it proved that gating
+      a tagging action on `tags` alone is a false pass, because default_tags
+      merge into the computed tags_all and never touch tags. Every tags gate in
+      the database was corrected to name both.
+
+      update is marked verified because policy and tags are the only attributes
+      that can be updated IN PLACE, and both are now measured. description was
+      checked directly on 2026-09-26 and forces replacement, as do name and
+      path; a replacement is a create plus a delete, not an update.
+
+      iam:DeletePolicyVersion is retained against the measurement. See the
+      comment on it above: the five-version pruning limit is unreachable by a
+      fixture that applies its change once, and dropping it would be a false
+      pass for any policy already updated five times.
+
+      delete remains unverified: teardown always runs with operator credentials,
+      so the loop structurally cannot derive a delete path.
 
   - type: aws_iam_role_policy_attachment
     service: iam

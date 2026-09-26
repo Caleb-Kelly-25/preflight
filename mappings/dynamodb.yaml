@@ -130,7 +130,7 @@ resources:
         # both MEASURED to be required with no separate call ever appearing.
         # REASONED here from that precedent.
         - action: dynamodb:TagResource
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
         # GENUINE SECOND CALLS, not extra permissions on CreateTable. Neither TTL
         # nor point-in-time recovery is a CreateTable parameter — both are
         # configured by their own API after the table goes ACTIVE — so a table
@@ -161,9 +161,9 @@ resources:
         - action: dynamodb:UpdateContinuousBackups
           when: { attribute_changed: [point_in_time_recovery] }
         - action: dynamodb:TagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: dynamodb:UntagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - dynamodb:DeleteTable
 

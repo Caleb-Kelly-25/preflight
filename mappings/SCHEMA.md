@@ -261,7 +261,7 @@ operations:
   create:
     - iam:CreateRole                      # always required
     - action: iam:TagRole
-      when: { attribute_set: tags }       # only when tags are set
+      when: { attribute_set: [tags, tags_all] }   # only when tagged
   update:
     - action: iam:UpdateAssumeRolePolicy
       when: { attribute_changed: [assume_role_policy] }
@@ -274,9 +274,33 @@ Two conditions, and deliberately no more:
 
 | Condition | Holds when |
 |---|---|
-| `attribute_set: <name>` | the attribute has a value in the state the operation acts on |
+| `attribute_set: <name>` or `[<names>]` | **any** named attribute has a value in the state the operation acts on |
 | | **A `false` boolean counts as UNSET.** See the warning below before gating on one. |
-| `attribute_changed: [<names>]` | any named attribute differs between prior and planned state |
+| `attribute_changed: <name>` or `[<names>]` | **any** named attribute differs between prior and planned state |
+
+Both accept a bare name or a list, and a list is satisfied by **any one** of its
+names. Naming several is not a convenience — see the next section for the case
+where naming only one is a false pass.
+
+### Always name `tags_all` alongside `tags`
+
+**Any gate mentioning `tags` must mention `tags_all` too.** `TestTagGatesAlsoNameTagsAll`
+enforces it, and CI fails otherwise.
+
+Provider-level `default_tags` merge into each resource's *computed* `tags_all`
+and never touch its `tags`. So a plan that changes only `default_tags` shows
+`tags_all` changed with `tags` untouched, a gate reading `tags` alone evaluates
+false, the tagging action is dropped, and the engine reports a plan as safe that
+cannot apply.
+
+This was measured on 2026-09-26, not reasoned: a `default_tags`-only change to an
+otherwise untouched `aws_iam_policy` requires `iam:TagPolicy`
+(`derivefixtures/aws_iam_policy__update_default_tags`). **51 gates across 11
+services had the defect** — it was one pattern copied, not one entry's mistake,
+which is why the guard is a test rather than a note.
+
+On create, `attribute_set: [tags, tags_all]` is also the correct form: a resource
+with no `tags` of its own still ends up tagged if the provider sets defaults.
 
 This is not an expression language on purpose. A contributor has to be able to
 check an entry by eye and a reviewer has to be able to tell whether it is right;
@@ -320,8 +344,20 @@ One trap when writing the minimal variant: a provider `default_tags` block
 applies to every resource in the configuration, so a minimal fixture that keeps
 one silently tags the resource and measures nothing.
 
+### Measuring an update gate
+
+An update path depends on **which attribute changed**, so each branch of each
+gate is a separate measurement and a branch nobody measured is a false pass. Use
+a two-phase fixture — see [derivefixtures/README.md](../derivefixtures/README.md)
+— and vary exactly one attribute per fixture.
+
+`aws_iam_policy` is the worked example and took three fixtures: a document
+change, a tag change, and a `default_tags` change. Before they were run, the
+entry listed nothing at all for a tags-only update, so a plan changing only tags
+would have been reported as needing no tagging permission.
+
 **Narrowing an action with `when` is the one edit that can introduce a false
-pass**, so tie it to evidence. Both shipped uses came from measurement:
+pass**, so tie it to evidence. The tagging gates came from measurement:
 `iam:TagRole` is authorised by `CreateRole`'s tags parameter with no TagRole call
 ever made, and `s3:PutBucketTagging` is a genuine second call because
 `CreateBucket` does not accept tags.

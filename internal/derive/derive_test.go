@@ -43,8 +43,27 @@ type fakeApplier struct {
 	// a stalled apply that leaves the state lock held.
 	destroyFailsAfter int
 
+	// setupFails models a "before" apply that cannot be established.
+	setupFails bool
+
 	applies  int
 	destroys int
+
+	// grantsAtSetup records how many grants had happened each time Setup ran.
+	// Ordering is the whole point of Setup, so it is asserted rather than assumed:
+	// a setup that ran AFTER the grant would establish the resource under the
+	// scratch role, and the run would measure the create and the update together.
+	grantsAtSetup []int
+}
+
+// Setup is a no-op for the create case these tests mostly model. It records
+// ordering so TestSetupRunsBeforeEveryGrant can check it.
+func (a *fakeApplier) Setup(context.Context, time.Duration) error {
+	a.grantsAtSetup = append(a.grantsAtSetup, len(a.grantor.granted))
+	if a.setupFails {
+		return fmt.Errorf("simulated setup failure")
+	}
+	return nil
 }
 
 func (a *fakeApplier) currentGrant() []string {
@@ -302,4 +321,78 @@ func TestDeriveRequiresItsCollaborators(t *testing.T) {
 	if _, err := d.Derive(context.Background(), nil); err == nil {
 		t.Error("Derive ran with no Grantor or Applier")
 	}
+}
+
+// TestSetupRunsBeforeEveryGrant pins the ordering an update measurement depends
+// on. Setup uses operator credentials to establish the resource being changed;
+// if it ran after the grant, or only once at the start, the scratch role would
+// be creating the resource and the derived set would be the create path plus the
+// update path with no way to separate them.
+func TestSetupRunsBeforeEveryGrant(t *testing.T) {
+	truth := []string{"iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:GetPolicy"}
+	d, g, a := newFixture(truth, truth)
+
+	res, err := d.Derive(context.Background(), truth)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	// One setup per attempt, no more and no fewer. A single setup at the start
+	// would leave later attempts measuring against a resource the previous
+	// destroy removed.
+	if len(a.grantsAtSetup) != len(res.Attempts) {
+		t.Errorf("setups=%d, attempts=%d; want one setup per attempt",
+			len(a.grantsAtSetup), len(res.Attempts))
+	}
+	// At the Nth setup, N-1 grants had happened — so this attempt's setup came
+	// first.
+	for i, grants := range a.grantsAtSetup {
+		if grants != i {
+			t.Errorf("setup %d saw %d prior grants, want %d: the grant beat the setup", i, grants, i)
+		}
+	}
+	if len(g.granted) != len(a.grantsAtSetup) {
+		t.Errorf("granted=%d setups=%d; want equal", len(g.granted), len(a.grantsAtSetup))
+	}
+}
+
+// TestSetupFailureStopsTheRun covers the same hazard a failed destroy does. A
+// setup that fails part-way has created an unknown amount of the "before" state,
+// so the next attempt would be measured against something nobody can describe.
+// Stopping is the only honest answer.
+func TestSetupFailureStopsTheRun(t *testing.T) {
+	truth := []string{"iam:CreatePolicyVersion", "iam:GetPolicy"}
+	g := &fakeGrantor{failOn: -1}
+	a := &fakeApplier{grantor: g, required: truth, setupFails: true}
+	d := &derive.Deriver{Grantor: g, Applier: a, MaxAttempts: 6, AttemptBudget: time.Second}
+
+	res, err := d.Derive(context.Background(), truth)
+	if err == nil {
+		t.Fatal("want an error when setup fails, got nil")
+	}
+	if !res.Dirty {
+		t.Error("want Dirty: a half-established before-state is unknown state")
+	}
+	if res.Sufficiency != derive.ConfidenceInconclusive {
+		t.Errorf("Sufficiency=%v, want inconclusive", res.Sufficiency)
+	}
+	// Nothing may be granted after a failed setup, and nothing may be applied.
+	if len(g.granted) != 0 {
+		t.Errorf("granted %d times after a failed setup; want 0", len(g.granted))
+	}
+	if a.applies != 0 {
+		t.Errorf("applied %d times after a failed setup; want 0", a.applies)
+	}
+	if !hasWarningContaining(res.Warnings, "setup failed") {
+		t.Errorf("want a warning naming the setup failure, got %v", res.Warnings)
+	}
+}
+
+func hasWarningContaining(warnings []string, want string) bool {
+	for _, w := range warnings {
+		if strings.Contains(w, want) {
+			return true
+		}
+	}
+	return false
 }

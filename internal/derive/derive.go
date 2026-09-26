@@ -21,6 +21,16 @@ type Grantor interface {
 
 // Applier runs one Terraform lifecycle against one fixture.
 type Applier interface {
+	// Setup establishes the state the measured operation acts ON, using OPERATOR
+	// credentials. It is a no-op for a create.
+	//
+	// An update cannot be measured without it. The thing being measured is the
+	// permission needed to CHANGE a resource, so the resource has to exist
+	// first — and it must be created with full permissions, or the run would be
+	// measuring the create and the update together and could not tell them
+	// apart.
+	Setup(ctx context.Context, budget time.Duration) error
+
 	// Apply runs terraform apply under the scratch role's credentials,
 	// returning OutcomeStalled rather than blocking past budget.
 	Apply(ctx context.Context, budget time.Duration) Outcome
@@ -236,6 +246,19 @@ var errDirty = errors.New("teardown failed; the environment is dirty and further
 // that is missing something.
 func (d *Deriver) attempt(ctx context.Context, res *Result, actions []string, budget time.Duration) (Outcome, error) {
 	idx := len(res.Attempts)
+
+	// Setup runs BEFORE the grant, with operator credentials, so the resource an
+	// update acts on exists and its creation is not part of what is measured.
+	if err := d.Applier.Setup(ctx, budget); err != nil {
+		out := Outcome{Kind: OutcomeFailed, Detail: fmt.Sprintf("setup: %v", err)}
+		res.Attempts = append(res.Attempts, Attempt{Index: idx, Granted: actions, Outcome: out})
+		// A setup failure leaves unknown state behind, exactly as a failed
+		// teardown does, so it stops the run rather than measuring on top of it.
+		res.Warnings = append(res.Warnings, fmt.Sprintf("attempt %d: setup failed: %v", idx, err))
+		res.Dirty = true
+		return out, errDirty
+	}
+
 	if err := d.Grantor.Grant(ctx, actions); err != nil {
 		out := Outcome{Kind: OutcomeFailed, Detail: fmt.Sprintf("granting: %v", err)}
 		res.Attempts = append(res.Attempts, Attempt{Index: idx, Granted: actions, Outcome: out})

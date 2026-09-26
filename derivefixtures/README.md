@@ -1,0 +1,148 @@
+# Derivation fixtures
+
+Each directory here is one **measurement**: a minimal Terraform configuration the
+derivation harness applies under a scratch role holding exactly a candidate set
+of IAM actions, in order to find out which actions that configuration genuinely
+requires.
+
+These fixtures **create real AWS resources**. They are not tests. `make test`
+never reaches them; running one takes the `awsderive` build tag and three
+separate guards. See `CLAUDE.md` for the harness and `cmd/derive/main.go` for the
+guards.
+
+## Why fixtures exist at all
+
+A mapping entry claims "creating an `aws_iam_role` requires these seven actions."
+That claim has two dimensions, and only one is checkable by inspection:
+
+- **Names correct** — `accessanalyzer:ValidatePolicy` settles this, for free.
+- **List complete** — nothing settles this but running a real apply with a
+  deliberately incomplete permission set and watching it fail.
+
+Completeness is the dimension that produces a false "allowed", so it is the
+dimension that needs the money and the blast radius. Every entry whose create
+path has been derived so far was found to be **wrong, always by omission** —
+ten for ten.
+
+## Naming
+
+| Pattern | Means |
+|---|---|
+| `aws_vpc/` | The maximal create fixture: tags set, optional attributes set. |
+| `aws_vpc__minimal/` | The same type with nothing optional set. |
+| `aws_iam_policy__update/` | A two-phase fixture measuring the update path. |
+
+The harness takes a directory, so a variant is just another directory. No
+registry, no index — the name carries the meaning.
+
+### Why variants are load-bearing
+
+A derived set is valid for **the configuration the fixture uses**, not for the
+resource type in general. A tagged bucket needs `s3:PutBucketTagging`; an
+untagged one does not.
+
+That is what the schema's `when` gates express, and a gate is the only schema
+feature that can introduce a **false pass**, because it *removes* actions. A gate
+can therefore only be trusted if it was measured in **both** directions: derive
+the maximal fixture, derive the minimal one, and the difference between the two
+sets *is* the gate. If an untagged VPC still requires `ec2:CreateTags`, the gate
+is wrong and the entry is under-reporting today.
+
+This method found a shipped false pass: `ec2:RevokeSecurityGroupEgress` was gated
+on `attribute_set: egress` and is required *without* it, because the provider
+manages egress exhaustively and revokes the allow-all rule AWS attaches to every
+new group.
+
+## Create fixtures
+
+One resource, the smallest configuration that is still representative. Conventions:
+
+- **Name every resource `preflight-derive-*`.** The sweep that cleans up after a
+  crashed run finds resources by that prefix and by the `preflight-derive` tag.
+- **Set tags.** Tagging has needed its own permission in every service measured,
+  by three *different* mechanisms — S3 makes a separate `PutBucketTagging` call,
+  while IAM and EC2 authorize the tagging action as part of the create with no
+  separate call at all. An untagged fixture misses it, and which mechanism a
+  service uses is not inferable from another service.
+- **Keep anything the fixture grants inert.** Policy documents `Deny` an action
+  on a resource that does not exist. A fixture must not be able to hold
+  privileges even if someone attaches it.
+- **Take `account_id` as a variable** if the configuration needs an ARN. The
+  driver sets `TF_VAR_account_id` from the verified caller identity. Do not
+  hardcode an account number — it ends up in git history.
+
+## Two-phase fixtures: measuring an update
+
+An update cannot be measured by a create fixture, because there is nothing to
+update. The resource has to exist first — and it has to be created with **full
+permissions**, or the run measures the create and the update together with no way
+to tell them apart.
+
+So a two-phase fixture declares:
+
+```hcl
+variable "phase" {
+  type    = number
+  default = 1
+}
+```
+
+and the harness runs it twice per attempt:
+
+| Phase | Credentials | What it is |
+|---|---|---|
+| 1 | operator | The before state. Not measured. |
+| 2 | scratch role | The change. This is the measurement. |
+
+`cmd/derive` **refuses to run** a non-create operation against a fixture that
+declares no `phase` variable. Without it both phases apply the same
+configuration, the scratch role performs the create, and the run reports the
+create path under the name "update" — a wrong mapping presented as measured,
+which is the one failure this tool exists to prevent.
+
+### Change exactly one thing
+
+An update path depends on *which attribute changed*, so a fixture that changes
+three attributes produces one action set and no way to attribute any of it. Hold
+everything else constant, including tags.
+
+### Do not change an attribute that forces a replace
+
+Terraform replaces rather than updates when an immutable attribute changes, and a
+replace is a create plus a delete wearing an update's name. Check the provider
+docs for `ForceNew` before picking the attribute to vary. `aws_iam_policy`'s
+`name` and `description` are both in that category.
+
+## Traps already paid for
+
+- **A provider `default_tags` block silently tags a "minimal" fixture**, so the
+  minimal variant measures tagging anyway and the gate appears to hold when it
+  was never tested.
+- **`attribute_set` reads a `false` boolean as unset.** `aws_vpc`'s
+  `enable_dns_support` defaults to *true*, so the meaningful non-default value is
+  exactly the one the gate treats as absent — gating on it would have been a
+  false pass. `aws_subnet`'s boolean gate is correct only because that attribute
+  happens to default to false.
+- **`ec2:DescribeTags` has been a surplus guess twice.** The provider reads tags
+  back from each resource's own `Describe` call. Stop adding it.
+- **An entry with no `read_actions` has under-reported every single time it was
+  measured — ten for ten.** Terraform reads every resource back after writing
+  it, so an empty read set almost always means nobody checked.
+- **Some denials hang rather than fail.** A missing `s3:ListBucket` makes the
+  provider retry `HeadBucket` indefinitely. The harness treats a stall as
+  evidence, kills the whole process tree, and then **stops the run**, because a
+  killed apply may have created a resource it never recorded in state.
+- **EC2 and VPC do not name the denied action.** They return
+  `UnauthorizedOperation` with an opaque encoded message. Decoding needs
+  `sts:DecodeAuthorizationMessage` and does not always work.
+
+## Adding a fixture
+
+1. Write the directory, following the conventions above.
+2. Run `go run ./cmd/arncheck` if you also touched a mapping — it verifies every
+   `arn_format` against AWS's machine-readable service reference.
+3. Run the harness and read the report. It emits evidence; it deliberately does
+   **not** edit the YAML. Promoting an entry to `verified` is a *claim*, and a
+   person makes it in the pull request.
+4. Record the AWS provider version in the entry's notes. Derived sets are pinned
+   to one provider version and they will drift.

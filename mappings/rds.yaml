@@ -74,7 +74,7 @@ resources:
         # is made, but the tagging action is still authorized. REASONED from the
         # tag-on-create documentation, not measured.
         - action: rds:AddTagsToResource
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
         # A different API entirely, not an extra permission on top of
         # CreateDBInstance. Gated because asking every user of this resource for
         # a restore permission they will never use is a false positive on
@@ -91,9 +91,9 @@ resources:
         # under-report.
         - rds:ModifyDBInstance
         - action: rds:AddTagsToResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: rds:RemoveTagsFromResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - rds:DeleteDBInstance
 
@@ -225,13 +225,13 @@ resources:
       create:
         - rds:CreateDBSubnetGroup
         - action: rds:AddTagsToResource
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
       update:
         - rds:ModifyDBSubnetGroup
         - action: rds:AddTagsToResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: rds:RemoveTagsFromResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - rds:DeleteDBSubnetGroup
     notes: >-
@@ -270,7 +270,7 @@ resources:
       create:
         - rds:CreateDBParameterGroup
         - action: rds:AddTagsToResource
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
         # CreateDBParameterGroup takes no parameters — it creates an empty group
         # at the engine defaults, and every `parameter` block is applied by a
         # following ModifyDBParameterGroup. This is the same shape as
@@ -287,9 +287,9 @@ resources:
         # anticipate.
         - rds:ResetDBParameterGroup
         - action: rds:AddTagsToResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: rds:RemoveTagsFromResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - rds:DeleteDBParameterGroup
     notes: >-

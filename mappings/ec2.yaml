@@ -53,7 +53,7 @@ resources:
         # TagSpecifications so no separate tagging call is ever made, yet
         # ec2:CreateTags is still required to authorise it.
         - action: ec2:CreateTags
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
         # MEASURED SURPLUS for a default VPC, and deliberately still
         # unconditional. The __minimal derivation proved a VPC with default DNS
         # attributes does not need this, so listing it unconditionally
@@ -72,9 +72,9 @@ resources:
       update:
         - ec2:ModifyVpcAttribute
         - action: ec2:CreateTags
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: ec2:DeleteTags
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - ec2:DeleteVpc
     notes: >-
@@ -132,7 +132,7 @@ resources:
       create:
         - ec2:CreateSubnet
         - action: ec2:CreateTags
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
         # This gate works, but only by luck, and the next person to copy the
         # pattern should know why. `attribute_set` reads a false boolean as
         # unset. map_public_ip_on_launch DEFAULTS to false, so "unset" and
@@ -145,9 +145,9 @@ resources:
       update:
         - ec2:ModifySubnetAttribute
         - action: ec2:CreateTags
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: ec2:DeleteTags
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - ec2:DeleteSubnet
 
@@ -177,7 +177,7 @@ resources:
         # GATE MEASURED both directions 2026-09-25: required with tags,
         # proven surplus without them via the __minimal fixture.
         - action: ec2:CreateTags
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
         # A security group is created empty; inline rules are separate calls.
         - action: ec2:AuthorizeSecurityGroupIngress
           when: { attribute_set: ingress }
@@ -212,9 +212,9 @@ resources:
         - action: ec2:RevokeSecurityGroupEgress
           when: { attribute_changed: [egress] }
         - action: ec2:CreateTags
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: ec2:DeleteTags
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - ec2:DeleteSecurityGroup
     notes: >-

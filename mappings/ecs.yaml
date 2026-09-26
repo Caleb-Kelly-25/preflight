@@ -50,15 +50,15 @@ resources:
         # create additionally requires ecs:TagResource. Same shape as
         # ec2:CreateTags on CreateVpc. REASONED from the docs, not measured.
         - action: ecs:TagResource
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
       update:
         - ecs:UpdateCluster
         - action: ecs:UpdateClusterSettings
           when: { attribute_changed: [setting] }
         - action: ecs:TagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: ecs:UntagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - ecs:DeleteCluster
     notes: >-
@@ -104,7 +104,7 @@ resources:
       create:
         - ecs:RegisterTaskDefinition
         - action: ecs:TagResource
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
       update:
         # A task definition is immutable, so an "update" registers a NEW
         # revision and then deregisters the old one (unless skip_destroy is
@@ -114,9 +114,9 @@ resources:
         - ecs:RegisterTaskDefinition
         - ecs:DeregisterTaskDefinition
         - action: ecs:TagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: ecs:UntagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - ecs:DeregisterTaskDefinition
 
@@ -196,13 +196,13 @@ resources:
       create:
         - ecs:CreateService
         - action: ecs:TagResource
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
       update:
         - ecs:UpdateService
         - action: ecs:TagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: ecs:UntagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - ecs:DeleteService
         # Unless force_delete is set, the provider scales the service to zero

@@ -47,13 +47,42 @@ type Action struct {
 // able to tell whether it is right. Anything richer defeats the point of the
 // database being open and inspectable.
 type Condition struct {
-	// AttributeSet requires the action only when the named attribute has a
+	// AttributeSet requires the action only when ANY named attribute has a
 	// value. An attribute that is configured but unknown until apply counts as
 	// set — it will have a value, we just cannot see it yet.
-	AttributeSet string `yaml:"attribute_set,omitempty"`
-	// AttributeChanged requires the action only when any named attribute
+	AttributeSet AttrNames `yaml:"attribute_set,omitempty"`
+	// AttributeChanged requires the action only when ANY named attribute
 	// differs between the prior and planned state.
-	AttributeChanged []string `yaml:"attribute_changed,omitempty"`
+	AttributeChanged AttrNames `yaml:"attribute_changed,omitempty"`
+}
+
+// AttrNames is one or more attribute names, satisfied when ANY of them is.
+//
+// It accepts a bare string in YAML as well as a list, because most conditions
+// name one attribute and requiring brackets for that case would be noise. The
+// list form exists because naming only one is sometimes a FALSE PASS:
+// `attribute_set: tags` misses a resource whose tags come from the provider's
+// `default_tags` block, since those merge into the computed `tags_all` and never
+// touch `tags`. Measured 2026-09-26 — see derivefixtures/aws_iam_policy__update_default_tags.
+type AttrNames []string
+
+// UnmarshalYAML accepts either `attribute_set: tags` or
+// `attribute_set: [tags, tags_all]`.
+func (n *AttrNames) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var one string
+		if err := value.Decode(&one); err != nil {
+			return err
+		}
+		*n = AttrNames{one}
+		return nil
+	}
+	var many []string
+	if err := value.Decode(&many); err != nil {
+		return err
+	}
+	*n = AttrNames(many)
+	return nil
 }
 
 // Reference is an action required against another resource's ARN.
@@ -371,10 +400,10 @@ func (r Resource) validate() error {
 			if a.When == nil {
 				continue
 			}
-			if a.When.AttributeSet == "" && len(a.When.AttributeChanged) == 0 {
+			if len(a.When.AttributeSet) == 0 && len(a.When.AttributeChanged) == 0 {
 				return fmt.Errorf("%s: action %q has an empty `when`; omit it if the action is always required", r.Type, a.Action)
 			}
-			if a.When.AttributeSet != "" && len(a.When.AttributeChanged) > 0 {
+			if len(a.When.AttributeSet) > 0 && len(a.When.AttributeChanged) > 0 {
 				return fmt.Errorf("%s: action %q sets both `attribute_set` and `attribute_changed`; use one", r.Type, a.Action)
 			}
 		}
@@ -559,12 +588,20 @@ func conditionHolds(c *Condition, attrs, unknown, before, after map[string]any) 
 	if c == nil {
 		return true
 	}
-	if c.AttributeSet != "" {
+	// Any-of, in both directions. A condition naming several attributes holds as
+	// soon as one of them holds, which is what makes [tags, tags_all] correct:
+	// either spelling being set means the resource ends up tagged.
+	for _, name := range c.AttributeSet {
 		// Configured but unknown until apply still means it will have a value.
-		if _, ok := unknown[c.AttributeSet]; ok {
+		if _, ok := unknown[name]; ok {
 			return true
 		}
-		return isSet(attrs[c.AttributeSet])
+		if isSet(attrs[name]) {
+			return true
+		}
+	}
+	if len(c.AttributeSet) > 0 {
+		return false
 	}
 	for _, name := range c.AttributeChanged {
 		if _, ok := unknown[name]; ok {

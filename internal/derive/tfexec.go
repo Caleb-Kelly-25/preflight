@@ -48,6 +48,38 @@ type TerraformApplier struct {
 	//
 	// Empty means the fixture directory, which is the old behaviour.
 	StateDir string
+
+	// SetupVars and ApplyVars are extra `terraform` arguments selecting which
+	// shape of the fixture to apply. They are how an update is measured: the
+	// fixture takes a `phase` variable, Setup applies phase 1 as the operator to
+	// establish the resource, and Apply applies phase 2 as the scratch role to
+	// perform the change being measured.
+	//
+	// Both empty means a create: Setup does nothing and Apply applies the fixture
+	// as written.
+	SetupVars []string
+	ApplyVars []string
+}
+
+// Setup applies the "before" shape with OPERATOR credentials.
+//
+// No-op when SetupVars is empty, which is the create case: there is nothing for
+// a create to act on, and applying the fixture here would create the very
+// resource the measured apply is supposed to create.
+func (t *TerraformApplier) Setup(ctx context.Context, budget time.Duration) error {
+	if len(t.SetupVars) == 0 {
+		return nil
+	}
+	args := append([]string{"apply", "-auto-approve", "-input=false", "-no-color"}, t.stateArgs()...)
+	args = append(args, t.SetupVars...)
+	out, timedOut, err := t.run(ctx, budget, t.operatorEnv(), args...)
+	if timedOut {
+		return errors.New("setup apply timed out")
+	}
+	if err != nil {
+		return fmt.Errorf("setup apply failed: %w: %s", err, tail(out))
+	}
+	return nil
 }
 
 // stateArgs points Terraform at StateDir when one is set. Passed to apply and
@@ -63,6 +95,7 @@ func (t *TerraformApplier) stateArgs() []string {
 func (t *TerraformApplier) Apply(ctx context.Context, budget time.Duration) Outcome {
 	start := time.Now()
 	args := append([]string{"apply", "-auto-approve", "-input=false", "-no-color"}, t.stateArgs()...)
+	args = append(args, t.ApplyVars...)
 	out, timedOut, err := t.run(ctx, budget, t.applyEnv(), args...)
 	elapsed := time.Since(start)
 
@@ -101,6 +134,9 @@ func (t *TerraformApplier) Destroy(ctx context.Context) error {
 		budget = 10 * time.Minute
 	}
 	dargs := append([]string{"destroy", "-auto-approve", "-input=false", "-no-color"}, t.stateArgs()...)
+	// Destroy must see the same variables, or a fixture whose shape depends on
+	// them cannot be planned for deletion.
+	dargs = append(dargs, t.ApplyVars...)
 	out, timedOut, err := t.run(ctx, budget, t.operatorEnv(), dargs...)
 	if err == nil && !timedOut {
 		return nil

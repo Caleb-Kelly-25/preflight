@@ -123,7 +123,7 @@ resources:
         # both of which WERE measured to be required with no separate call ever
         # appearing. REASONED here from that precedent.
         - action: sns:TagResource
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
       update:
         # Deliberately NOT gated. Every in-place change to a topic — display
         # name, the policy document, the delivery policy, the KMS key, the
@@ -133,9 +133,9 @@ resources:
         # under-report.
         - sns:SetTopicAttributes
         - action: sns:TagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: sns:UntagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - sns:DeleteTopic
 

@@ -84,7 +84,7 @@ resources:
         # CreateRole, which was MEASURED to be required with no TagRole call ever
         # appearing. REASONED here, not measured.
         - action: logs:TagResource
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
         # A genuine second call: retention is not a CreateLogGroup parameter.
         - action: logs:PutRetentionPolicy
           when: { attribute_set: retention_in_days }
@@ -100,9 +100,9 @@ resources:
         - action: logs:DeleteRetentionPolicy
           when: { attribute_changed: [retention_in_days] }
         - action: logs:TagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: logs:UntagResource
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: logs:AssociateKmsKey
           when: { attribute_changed: [kms_key_id] }
         - action: logs:DisassociateKmsKey

@@ -107,7 +107,7 @@ resources:
         # to be required with no TagRole call ever appearing, and ec2:CreateTags
         # on CreateVpc, likewise measured. REASONED here from that precedent.
         - action: sqs:TagQueue
-          when: { attribute_set: tags }
+          when: { attribute_set: [tags, tags_all] }
       update:
         # Deliberately NOT gated. Every in-place change to a queue —
         # visibility timeout, message retention, delay, max message size,
@@ -117,9 +117,9 @@ resources:
         # comes to under-report.
         - sqs:SetQueueAttributes
         - action: sqs:TagQueue
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
         - action: sqs:UntagQueue
-          when: { attribute_changed: [tags] }
+          when: { attribute_changed: [tags, tags_all] }
       delete:
         - sqs:DeleteQueue
 
