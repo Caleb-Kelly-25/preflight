@@ -1,0 +1,225 @@
+# AWS Key Management Service
+#
+# Names checked 2026-09-26 against AWS's machine-readable service reference, not
+# a docs page.
+#
+# COMPLETENESS IS UNESTABLISHED, and unlike every other file here it is likely to
+# STAY that way. See "why these cannot be derived" below.
+#
+# WHY THESE CANNOT BE DERIVED, AND WHY THAT IS A DECISION RATHER THAN A GAP
+#
+# The harness derives an entry by creating the resource many times over —
+# typically 8 to 12 applies, each one create-then-destroy. For a KMS key that is
+# not affordable and not reversible:
+#
+#   - A customer-managed key bills monthly from the moment it exists.
+#   - A key cannot be deleted. ScheduleKeyDeletion sets a MANDATORY waiting
+#     period with a 7-day minimum, and there is no way to shorten or cancel past
+#     it. So `terraform destroy` leaves a key behind that keeps billing for at
+#     least a week, and every attempt in a derivation run leaves another.
+#
+# A run would therefore cost real money, leave a week of un-deletable residue,
+# and violate the harness's own contract that every attempt starts from a clean
+# account. `derivefixtures/` deliberately contains no KMS fixture, and adding one
+# needs a decision, not just a file.
+#
+# The consequence, stated plainly: these entries are reasoning. They are `draft`
+# and every finding they produce is capped at `Likely`, which is the honest
+# outcome for a claim nobody measured.
+#
+# KMS IS GOVERNED BY A MANDATORY RESOURCE POLICY
+#
+# Every KMS key has a key policy, and unlike an S3 bucket policy it is not
+# optional — a key cannot exist without one, and it is the primary access control
+# for the key. `iam:SimulatePrincipalPolicy` does not evaluate resource-based
+# policies for IAM roles, which is what CI always uses.
+#
+# So `resource_policy_capable` matters more here than anywhere else in the
+# database: for KMS it is not an edge case, it is the normal case. Both entries
+# declare it for every operation that acts on an EXISTING key. A create is
+# exempt, because a key that does not exist yet has no policy that could deny
+# its creation.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awskeymanagementservice.html
+
+resources:
+  - type: aws_kms_key
+    service: kms
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awskeymanagementservice.html
+    # The key id is assigned by AWS, so this resolves on update and delete from
+    # prior state and degrades to "*" on create. Same shape as
+    # aws_route53_zone's zone_id.
+    arn_format: "arn:${Partition}:kms:${Region}:${Account}:key/${KeyId}"
+    arn_attributes:
+      KeyId: key_id
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    # Every operation acting on an existing key is subject to that key's policy,
+    # which is mandatory. Create is not: the key has no policy yet.
+    resource_policy_capable: [update, delete]
+
+    # Four separate calls to read one key back. KMS splits the key's metadata,
+    # its policy, its rotation state and its tags across four APIs, and the
+    # provider reads all four — so an entry listing only DescribeKey would
+    # under-report by three. This is the same shape that made aws_s3_bucket
+    # under-report by 14.
+    read_actions:
+      - kms:DescribeKey
+      - kms:GetKeyPolicy
+      - kms:GetKeyRotationStatus
+      - kms:ListResourceTags
+
+    operations:
+      create:
+        # CreateKey authorises against "*" only — the service reference lists no
+        # resource type for it, because the key does not exist yet and has no id
+        # to name.
+        - kms:CreateKey
+        # CreateKey takes both a Policy and a Tags parameter, so whether these
+        # are separate calls or authorised as part of the create is UNMEASURED —
+        # exactly the question that has had three different answers in three
+        # services. Listed unconditionally for the policy, which the provider
+        # always sets, and gated for tags.
+        - kms:PutKeyPolicy
+        - action: kms:TagResource
+          when: { attribute_set: [tags, tags_all] }
+        # Rotation is off by default and enabling it is a separate call. Gated on
+        # the attribute being SET, which is safe here only because the attribute
+        # defaults to false — see mappings/SCHEMA.md on never gating a boolean
+        # without checking its default. If AWS ever changes that default this
+        # gate becomes a false pass.
+        - action: kms:EnableKeyRotation
+          when: { attribute_set: [enable_key_rotation] }
+      update:
+        - action: kms:PutKeyPolicy
+          when: { attribute_changed: [policy] }
+        # Both directions, because the gate cannot tell enabling from disabling
+        # and only one of them is the action that would fail.
+        - action: kms:EnableKeyRotation
+          when: { attribute_changed: [enable_key_rotation, rotation_period_in_days] }
+        - action: kms:DisableKeyRotation
+          when: { attribute_changed: [enable_key_rotation] }
+        - action: kms:EnableKey
+          when: { attribute_changed: [is_enabled] }
+        - action: kms:DisableKey
+          when: { attribute_changed: [is_enabled] }
+        - action: kms:TagResource
+          when: { attribute_changed: [tags, tags_all] }
+        - action: kms:UntagResource
+          when: { attribute_changed: [tags, tags_all] }
+      delete:
+        # There is no DeleteKey. Terraform "deletes" a key by scheduling its
+        # deletion, and the key survives the waiting period regardless.
+        - kms:ScheduleKeyDeletion
+
+    notes: >-
+      DRAFT, and see the file header for why it is likely to stay that way: a KMS
+      key cannot be created and destroyed repeatedly, because deletion has a
+      mandatory 7-day minimum waiting period and the key bills throughout. The
+      derivation harness cannot run against this entry without leaving a week of
+      un-deletable billable residue per attempt.
+
+      That makes this the first entry in the database whose completeness is
+      blocked by the resource rather than by effort. If it is ever to reach
+      `verified` it will be by reading provider source, not by measurement, and
+      that is a weaker basis — which is what `draft` and the `Likely` cap are
+      for.
+
+      The read set is the part most likely to be right, and for a structural
+      reason: KMS splits a key's metadata, policy, rotation status and tags
+      across four separate APIs, so all four are needed. An entry listing only
+      kms:DescribeKey would under-report by three, which is the exact shape that
+      made aws_s3_bucket under-report by 14.
+
+      kms:PutKeyPolicy is listed on create unconditionally. The provider always
+      writes a key policy — a key cannot exist without one — but whether it does
+      so via CreateKey's Policy parameter or a following PutKeyPolicy call is
+      unmeasured. Listing it over-reports if the former is true, which is the
+      safe direction.
+
+      EnableKeyRotation's gate on create relies on enable_key_rotation defaulting
+      to false. That is currently true and is the only reason gating a boolean is
+      safe here.
+
+  - type: aws_kms_alias
+    service: kms
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awskeymanagementservice.html
+    # A PASSTHROUGH, and not for the usual reason. The alias ARN is
+    # arn:...:kms:region:account:alias/${Alias} where ${Alias} is the alias name
+    # WITHOUT its prefix — but Terraform's `name` attribute INCLUDES the prefix
+    # ("alias/my-key"). Templating ${Alias} from `name` would build
+    # "alias/alias/my-key", a wrong ARN, which is the dangerous direction.
+    #
+    # The computed `arn` attribute holds the real thing, so it is passed through
+    # instead: exact on update and delete, degraded to "*" on create.
+    arn_format: "${AliasArn}"
+    arn_attributes:
+      AliasArn: arn
+
+    # An alias is governed by the key policy of the key it points at, on every
+    # operation that touches an existing alias.
+    resource_policy_capable: [update, delete]
+
+    read_actions:
+      - kms:ListAliases
+
+    # Every alias call is authorised against BOTH the alias and the target key —
+    # the service reference lists both resource types for CreateAlias, DeleteAlias
+    # and UpdateAlias. The alias half is this entry's own arn_format; the key half
+    # is below, and without it this entry would under-report.
+    #
+    # `target_key_id` accepts either a bare key id or a full key ARN, which is
+    # what arn_or_name is for: an ARN is used as written, a bare id is templated
+    # into one, and anything else degrades to "*" rather than being nested inside
+    # a synthetic ARN.
+    references:
+      - action: kms:CreateAlias
+        arn_from: target_key_id
+        arn_format: "arn:${Partition}:kms:${Region}:${Account}:key/${Name}"
+        arn_or_name: { service: kms, resource_type: key }
+        operations: [create]
+      - action: kms:UpdateAlias
+        arn_from: target_key_id
+        arn_format: "arn:${Partition}:kms:${Region}:${Account}:key/${Name}"
+        arn_or_name: { service: kms, resource_type: key }
+        operations: [update]
+      - action: kms:DeleteAlias
+        arn_from: target_key_id
+        arn_format: "arn:${Partition}:kms:${Region}:${Account}:key/${Name}"
+        arn_or_name: { service: kms, resource_type: key }
+        operations: [delete]
+
+    operations:
+      create:
+        - kms:CreateAlias
+      update:
+        # Repointing an alias at a different key. The alias name itself is
+        # immutable — changing it forces replacement, which Terraform plans as
+        # delete plus create, both of which are mapped.
+        - action: kms:UpdateAlias
+          when: { attribute_changed: [target_key_id, target_key_arn] }
+      delete:
+        - kms:DeleteAlias
+
+    notes: >-
+      DRAFT. Names checked 2026-09-26; completeness unestablished.
+
+      Aliases carry no tags, so there is no tagging action here.
+
+      The reason this entry is worth reading even though it is small: every alias
+      call is authorised against TWO resources, the alias and the key it points
+      at. An entry naming only the alias would under-report on every single
+      operation. The key half is expressed with `references`, and `target_key_id`
+      is declared `arn_or_name` because the attribute legitimately holds either a
+      bare key id or a full key ARN and both spellings are common in real
+      configurations.
+
+      Unlike aws_kms_key, this entry COULD be derived cheaply if a key already
+      existed to point at — an alias is free and deletes instantly. A fixture
+      would need an operator-created key supplied as a variable rather than
+      created by the fixture, which the two-phase Setup machinery makes possible.
+      That is the realistic route to measuring anything in this file.

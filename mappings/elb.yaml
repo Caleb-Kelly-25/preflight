@@ -1,0 +1,275 @@
+# Elastic Load Balancing v2 — Application, Network and Gateway load balancers
+#
+# THE SERVICE PREFIX IS `elasticloadbalancing:`, NOT `elb:` OR `elbv2:`. There is
+# no separate v2 prefix: both generations share one prefix and are distinguished
+# by resource type, which is where the traps in this file come from.
+#
+# Names checked 2026-09-26 against AWS's machine-readable service reference
+# (the same source `go run ./cmd/arncheck` uses), not against a docs page.
+#
+# COMPLETENESS IS UNESTABLISHED. Nothing here has been derived — no fixture has
+# been run, and on the record so far that means these entries are probably
+# missing something: every entry in this database whose create path was later
+# derived turned out to be wrong, and always by omission. Treat the action lists
+# as a starting point for derivation, not as an answer. All three are `draft`,
+# so every finding is capped at `Likely`.
+#
+# WHY ALL THREE ARNs ARE PASSTHROUGHS OF THE COMPUTED `arn` ATTRIBUTE
+#
+# An ELBv2 ARN embeds an AWS-assigned id that cannot be known at plan time:
+#
+#   loadbalancer/app/${LoadBalancerName}/${LoadBalancerId}
+#   targetgroup/${TargetGroupName}/${TargetGroupId}
+#   listener/app/${LoadBalancerName}/${LoadBalancerId}/${ListenerId}
+#
+# Templating from `name` alone is impossible, and the one nearly-usable shape is
+# a trap: `loadbalancer/${LoadBalancerName}` exists in the reference but it is
+# the CLASSIC (v1) resource type. Using it for an `aws_lb` would build an ARN
+# that names a resource generation this resource is not, and a wrong ARN is the
+# dangerous direction — it can make an ARN-scoped policy appear to allow a call
+# that the real ARN would deny.
+#
+# So each entry passes through its own computed `arn` attribute. That resolves
+# exactly and correctly for update and delete, where prior state holds the real
+# ARN, and degrades to "*" on create, where nothing could have resolved anyway.
+# An unresolvable ARN is an honest "not checked"; a wrong one is not.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_elasticloadbalancingv2.html
+
+resources:
+  - type: aws_lb
+    service: elasticloadbalancing
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_elasticloadbalancingv2.html
+    # See the file header. `arn` is computed, so this resolves on update and
+    # delete and degrades to "*" on create.
+    arn_format: "${LoadBalancerArn}"
+    arn_attributes:
+      LoadBalancerArn: arn
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    # The provider reads the load balancer, its attributes and its tags back
+    # after every write. The attributes come from a SEPARATE call —
+    # DescribeLoadBalancers does not return idle timeout, deletion protection or
+    # access-log settings — so both Describes are needed, not one.
+    read_actions:
+      - elasticloadbalancing:DescribeLoadBalancers
+      - elasticloadbalancing:DescribeLoadBalancerAttributes
+      - elasticloadbalancing:DescribeTags
+
+    operations:
+      create:
+        - elasticloadbalancing:CreateLoadBalancer
+        # Required on CREATE, not only on update. Most of what `aws_lb` exposes —
+        # idle_timeout, enable_deletion_protection, access_logs, enable_http2,
+        # drop_invalid_header_fields, enable_cross_zone_load_balancing — is not a
+        # CreateLoadBalancer parameter, so the provider writes them in a second
+        # call immediately after creating the load balancer.
+        #
+        # Deliberately ungated. The attribute list is long, provider-version
+        # dependent, and partly written even at defaults; enumerating it in a
+        # `when` gate would be a false pass the first time AWS added an
+        # attribute nobody added to the list.
+        - elasticloadbalancing:ModifyLoadBalancerAttributes
+        # ELBv2 accepts tags as a CreateLoadBalancer parameter. Whether IAM then
+        # authorises AddTags for them, or whether the provider makes a separate
+        # AddTags call, is UNMEASURED here — and it is not inferable from another
+        # service. Tagging has been measured to work by three different
+        # mechanisms (S3 makes a separate call, IAM and EC2 authorise the tagging
+        # action as part of the create), so this needs its own measurement.
+        - action: elasticloadbalancing:AddTags
+          when: { attribute_set: [tags, tags_all] }
+        # ELB creates its service-linked role on the first load balancer in an
+        # account, and that requires the CALLER to hold this. It is listed
+        # unconditionally and therefore OVER-REPORTS for every account that
+        # already has the role, which is nearly all of them.
+        #
+        # Listed anyway, because the alternative is silently omitting a
+        # permission whose absence fails the very first apply in a new account,
+        # and over-reporting is the recoverable direction. This is really an
+        # account-level once-only requirement, which this per-resource schema
+        # cannot express — a genuine schema gap, recorded rather than papered
+        # over.
+        - iam:CreateServiceLinkedRole
+
+      update:
+        # Each of these is a distinct API call the provider makes only for the
+        # attribute it serves, so gating is correct here in a way it is not for
+        # ModifyLoadBalancerAttributes above.
+        - action: elasticloadbalancing:SetSecurityGroups
+          when: { attribute_changed: [security_groups] }
+        - action: elasticloadbalancing:SetSubnets
+          when: { attribute_changed: [subnets, subnet_mapping] }
+        - action: elasticloadbalancing:SetIpAddressType
+          when: { attribute_changed: [ip_address_type] }
+        # Ungated for the same reason as on create.
+        - elasticloadbalancing:ModifyLoadBalancerAttributes
+        - action: elasticloadbalancing:AddTags
+          when: { attribute_changed: [tags, tags_all] }
+        - action: elasticloadbalancing:RemoveTags
+          when: { attribute_changed: [tags, tags_all] }
+
+      delete:
+        - elasticloadbalancing:DeleteLoadBalancer
+
+    notes: >-
+      DRAFT. Names checked 2026-09-26 against AWS's machine-readable service
+      reference; completeness is UNESTABLISHED and no fixture has been run.
+
+      Deriving this entry is more expensive than the IAM and S3 ones: an
+      Application Load Balancer needs a VPC with at least two subnets in
+      different availability zones, and it bills by the hour, so a fixture is
+      neither free nor instant. That is the reason it is unmeasured, and it is
+      the reason to expect omissions rather than to assume there are none.
+
+      Two things a derivation should settle first. Whether
+      elasticloadbalancing:AddTags is authorised as part of CreateLoadBalancer or
+      needs a separate call — the answer differs by service and has never been
+      guessable. And whether the caller needs any ec2: reads for the subnets and
+      security groups it names; none are listed here, because ec2:DescribeTags
+      has already been a surplus guess twice in this database and guessing again
+      is not free.
+
+      iam:CreateServiceLinkedRole over-reports by design. See the comment on it.
+
+  - type: aws_lb_target_group
+    service: elasticloadbalancing
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_elasticloadbalancingv2.html
+    arn_format: "${TargetGroupArn}"
+    arn_attributes:
+      TargetGroupArn: arn
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    read_actions:
+      - elasticloadbalancing:DescribeTargetGroups
+      - elasticloadbalancing:DescribeTargetGroupAttributes
+      - elasticloadbalancing:DescribeTags
+
+    operations:
+      create:
+        - elasticloadbalancing:CreateTargetGroup
+        # Same shape as ModifyLoadBalancerAttributes: deregistration_delay,
+        # stickiness, slow_start, load_balancing_algorithm_type and the
+        # preserve-client-IP settings are attributes, not CreateTargetGroup
+        # parameters, so a second call follows the create. Ungated for the same
+        # reason — the list grows with each provider release.
+        - elasticloadbalancing:ModifyTargetGroupAttributes
+        - action: elasticloadbalancing:AddTags
+          when: { attribute_set: [tags, tags_all] }
+
+      update:
+        # ModifyTargetGroup covers the health-check fields and nothing else;
+        # ModifyTargetGroupAttributes covers everything under `stickiness`,
+        # `deregistration_delay` and friends. They are separate API calls and the
+        # provider makes whichever the change needs, so both are listed and only
+        # the narrow one is gated.
+        - action: elasticloadbalancing:ModifyTargetGroup
+          when:
+            attribute_changed:
+              - health_check
+              - port
+              - protocol
+              - protocol_version
+              - target_type
+              - matcher
+        - elasticloadbalancing:ModifyTargetGroupAttributes
+        - action: elasticloadbalancing:AddTags
+          when: { attribute_changed: [tags, tags_all] }
+        - action: elasticloadbalancing:RemoveTags
+          when: { attribute_changed: [tags, tags_all] }
+
+      delete:
+        - elasticloadbalancing:DeleteTargetGroup
+
+    notes: >-
+      DRAFT. Names checked 2026-09-26; completeness unestablished.
+
+      Cheaper to derive than aws_lb — a target group needs only a VPC, not
+      subnets in two zones, and it does not bill by the hour. It is the right
+      place to start if this file is derived at all.
+
+      `port`, `protocol` and `target_type` are listed under ModifyTargetGroup's
+      gate defensively. Several of them actually force REPLACEMENT rather than an
+      update, in which case Terraform plans a delete plus a create and this gate
+      never fires — so listing them costs nothing and protects against the
+      provider relaxing one of them into an in-place update later.
+
+  - type: aws_lb_listener
+    service: elasticloadbalancing
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_elasticloadbalancingv2.html
+    arn_format: "${ListenerArn}"
+    arn_attributes:
+      ListenerArn: arn
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    read_actions:
+      - elasticloadbalancing:DescribeListeners
+      - elasticloadbalancing:DescribeListenerAttributes
+      - elasticloadbalancing:DescribeTags
+
+    # `create` carries NO action on the listener itself, and that is the point of
+    # this entry.
+    #
+    # CreateListener is authorised against the LOAD BALANCER, not against the
+    # listener — the listener does not exist yet and has no ARN to be authorised
+    # against. So it lives under `references`, aimed at the load balancer ARN the
+    # resource already carries.
+    #
+    # Putting it in `operations.create` would scope it to this entry's own
+    # arn_format and ask AWS whether the caller may CreateListener on the
+    # listener, which is not a question AWS's model has an answer to. An
+    # ARN-scoped policy naming the load balancer would come back denied — a false
+    # positive — and the check would look broken rather than absent.
+    references:
+      - action: elasticloadbalancing:CreateListener
+        arn_from: load_balancer_arn
+        operations: [create]
+
+    operations:
+      create:
+        - action: elasticloadbalancing:AddTags
+          when: { attribute_set: [tags, tags_all] }
+
+      update:
+        - elasticloadbalancing:ModifyListener
+        # Listener attributes (TCP idle timeout) are a separate call, as
+        # everywhere else in this service.
+        - elasticloadbalancing:ModifyListenerAttributes
+        - action: elasticloadbalancing:AddTags
+          when: { attribute_changed: [tags, tags_all] }
+        - action: elasticloadbalancing:RemoveTags
+          when: { attribute_changed: [tags, tags_all] }
+
+      delete:
+        - elasticloadbalancing:DeleteListener
+
+    notes: >-
+      DRAFT. Names checked 2026-09-26; completeness unestablished.
+
+      The interesting part of this entry is the ARN, not the action list. Create
+      is authorised against the load balancer and is expressed with
+      `references`; see the comment above it. That makes this the first entry in
+      the database whose create path is entirely a cross-resource requirement,
+      and worth looking at as the pattern for any other child resource whose
+      creation is authorised against its parent — a listener rule, an ECS
+      service inside a cluster.
+
+      ModifyListener is ungated. A listener's default_action is a nested block
+      whose shape changes between provider versions, and a gate that named the
+      wrong path would drop the action for a real change. Ungated over-reports on
+      a tags-only update, which is the safe direction.
+
+      A listener's default_action usually names a target group. No reference is
+      declared for it, because the service reference does not list the target
+      group as a resource CreateListener authorises against — AWS validates the
+      target group inside the call rather than authorising the caller against it.
+      That is worth re-checking if a real apply ever fails with a target-group
+      denial.

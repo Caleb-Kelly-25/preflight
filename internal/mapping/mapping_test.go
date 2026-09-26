@@ -205,6 +205,23 @@ resources:
 	}
 }
 
+// crossServiceActions are the actions a resource genuinely needs from a service
+// other than its own. Each one is an exception to the service-prefix rule below
+// and needs a reason here, because the rule catches a real class of typo and a
+// silent exception would blunt it.
+//
+// This is a stopgap for a schema gap rather than a design. A service-linked role
+// requirement is not a property of the resource being created — it is an
+// account-level, once-only precondition — and `references`, the schema's
+// cross-resource mechanism, cannot express it because there is no attribute on
+// the resource holding the role's ARN.
+var crossServiceActions = map[string]bool{
+	// ELB creates its service-linked role on the FIRST load balancer in an
+	// account, and the caller must hold this for that to succeed. Over-reports
+	// for every account that already has the role. See mappings/elb.yaml.
+	"iam:CreateServiceLinkedRole": true,
+}
+
 // TestShippedDatabase guards the mapping files we actually ship. A broken entry
 // here would silently reduce coverage in the field, which the confidence model
 // exists to prevent.
@@ -234,11 +251,22 @@ func TestShippedDatabase(t *testing.T) {
 
 		// Actions must use their resource's own service prefix. A typo here
 		// produces a permanently-denied simulation that looks like a real gap.
+		//
+		// The allowlist is deliberately a list of exact action NAMES, not of
+		// prefixes. Allowing a prefix like "iam:" anywhere would let
+		// "elbv2:CreateListener" through the day someone declares an entry's
+		// service as something else, and catching that typo is the whole reason
+		// this check exists.
 		for op, actions := range r.Operations {
 			for _, a := range actions {
+				if crossServiceActions[a.Action] {
+					continue
+				}
 				prefix, _, _ := strings.Cut(a.Action, ":")
 				if prefix != r.Service {
-					t.Errorf("%s %s: action %q does not use the declared service prefix %q",
+					t.Errorf("%s %s: action %q does not use the declared service prefix %q "+
+						"(add it to crossServiceActions only if it is genuinely a cross-service "+
+						"requirement, with the reason)",
 						typ, op, a.Action, r.Service)
 				}
 			}

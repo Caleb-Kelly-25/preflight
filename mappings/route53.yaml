@@ -1,0 +1,151 @@
+# Amazon Route 53
+#
+# Names checked 2026-09-26 against AWS's machine-readable service reference, not
+# a docs page.
+#
+# COMPLETENESS IS UNESTABLISHED. Nothing here has been derived. On this
+# database's record that means these entries are probably missing something —
+# every entry whose create path was later derived turned out to be wrong, and
+# always by omission. Both are `draft`, so findings are capped at `Likely`.
+#
+# ROUTE 53 ARNs ARE GLOBAL, and this is the one thing about the service that
+# breaks an assumption made everywhere else in the database:
+#
+#   arn:${Partition}:route53:::hostedzone/${Id}
+#
+# There is no region and no account — two empty fields. An entry that templated
+# the caller's region or account in here would build an ARN that matches nothing
+# and every simulation against it would come back denied, which looks exactly
+# like a real permission gap. The formats below are written with the fields
+# empty, deliberately.
+#
+# THE ZONE ID IS ASSIGNED BY AWS (Z1D633PJN98FT9, not the domain name), so an
+# ARN cannot be built from a zone's `name`. Both entries template from `zone_id`
+# instead, which is computed on the zone and an input on the record. That means:
+#
+#   - creating a zone degrades to "*", because its id does not exist yet;
+#   - updating or deleting one resolves exactly, from prior state;
+#   - a record in an EXISTING zone resolves exactly;
+#   - a record in a zone created by the same plan degrades to "*", because the
+#     zone_id it references is unknown until the zone is applied.
+#
+# That last case is the common one in practice, and it is an honest "not
+# checked" rather than a wrong answer.
+#
+# Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonroute53.html
+
+resources:
+  - type: aws_route53_zone
+    service: route53
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonroute53.html
+    # Empty region and account are correct, not an oversight. See the header.
+    arn_format: "arn:${Partition}:route53:::hostedzone/${Id}"
+    arn_attributes:
+      Id: zone_id
+    context_keys:
+      "aws:RequestTag/*":
+        from: tags
+
+    # Route 53 keeps tags behind a separate call rather than returning them from
+    # GetHostedZone, so reading a zone back takes two calls.
+    read_actions:
+      - route53:GetHostedZone
+      - route53:ListTagsForResource
+
+    operations:
+      create:
+        # CreateHostedZone authorises against "*" ONLY — the service reference
+        # lists no resource type for it. The zone does not exist yet and has no
+        # id to be named, so there is nothing to scope to. Scoping it here is
+        # harmless but has no effect, which `cmd/arncheck` reports as a note.
+        - route53:CreateHostedZone
+        # Route 53 tags through one call that both adds and removes, so there is
+        # no separate Add/Remove pair as in ELB or IAM.
+        - action: route53:ChangeTagsForResource
+          when: { attribute_set: [tags, tags_all] }
+      update:
+        - action: route53:UpdateHostedZoneComment
+          when: { attribute_changed: [comment] }
+        # A private zone is associated with one or more VPCs, and changing that
+        # set is an authorised call in its own right.
+        - action: route53:AssociateVPCWithHostedZone
+          when: { attribute_changed: [vpc] }
+        - action: route53:ChangeTagsForResource
+          when: { attribute_changed: [tags, tags_all] }
+      delete:
+        - route53:DeleteHostedZone
+
+    notes: >-
+      DRAFT. Names checked 2026-09-26; completeness unestablished.
+
+      Cheap to derive — a hosted zone costs $0.50/month and creates in seconds,
+      with no VPC or subnet needed for a public zone. This is the most affordable
+      unmeasured entry in the database and a good next target.
+
+      Two things a derivation should settle. Whether deleting a zone requires
+      route53:ChangeResourceRecordSets, because AWS refuses to delete a zone that
+      still holds records other than its own NS and SOA sets, and the provider
+      may remove them first — if it does, that action is missing from `delete`
+      here and this entry under-reports. And whether
+      route53:DisassociateVPCFromHostedZone is needed when a VPC association is
+      removed rather than added; only the Associate half is listed, which is
+      reasoning, not measurement.
+
+      route53:GetChange is deliberately NOT listed. Route 53 returns a change id
+      that the provider polls until the change propagates, and that poll is a
+      real call — but it is authorised against the `change` resource type, not
+      the hosted zone, so it belongs in `references` against an attribute holding
+      a change id. No such attribute exists in the plan. The omission is recorded
+      rather than guessed at, and it is the most likely thing to be missing from
+      this entry.
+
+  - type: aws_route53_record
+    service: route53
+    status: draft
+    source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonroute53.html
+    # A record is not a resource AWS authorises against. Every call is authorised
+    # against the HOSTED ZONE that contains it, which is why this entry's
+    # arn_format names a hostedzone and not a record — there is no record
+    # resource type in the service reference at all.
+    arn_format: "arn:${Partition}:route53:::hostedzone/${Id}"
+    arn_attributes:
+      Id: zone_id
+
+    # Reading a record back means listing the zone's record sets; there is no
+    # GetResourceRecordSet call.
+    read_actions:
+      - route53:ListResourceRecordSets
+
+    # One API call covers create, update and delete: ChangeResourceRecordSets
+    # takes CREATE, UPSERT and DELETE actions in its change batch. So all three
+    # operations map to the same single action, which is unusual in this database
+    # and is correct here rather than a copy-paste error.
+    operations:
+      create:
+        - route53:ChangeResourceRecordSets
+      update:
+        - route53:ChangeResourceRecordSets
+      delete:
+        - route53:ChangeResourceRecordSets
+
+    notes: >-
+      DRAFT. Names checked 2026-09-26; completeness unestablished.
+
+      Records carry no tags, so there is no tagging action and no tags gate —
+      one of the few entries in the database where that is true.
+
+      The ARN is the containing zone, not the record. That is AWS's model, not a
+      simplification: the service reference has no record resource type, and a
+      policy controlling records does it by scoping ChangeResourceRecordSets to a
+      hostedzone ARN. Condition keys narrow it further —
+      route53:ChangeResourceRecordSetsRecordTypes and
+      route53:ChangeResourceRecordSetsActions are how a policy says "may edit
+      CNAMEs but not NS records". Neither is declared in `context_keys` here, so
+      a policy using them will be evaluated without them and may come back
+      denied when the real call would succeed. That is a false positive, the
+      recoverable direction, and it is the first thing to fix if this entry is
+      taken further.
+
+      Like the zone entry, route53:GetChange is not listed. See that entry's
+      notes.
