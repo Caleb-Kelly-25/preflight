@@ -1,0 +1,34 @@
+{
+  "resource_type": "aws_sqs_queue",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_sqs_queue",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 5,
+      "actions": [
+        "sqs:CreateQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:ListQueueTags",
+        "sqs:TagQueue"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_sqs_queue__minimal",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 6,
+      "actions": [
+        "sqs:CreateQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:ListQueueTags"
+      ]
+    }
+  ]
+}

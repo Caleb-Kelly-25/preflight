@@ -62,6 +62,8 @@ resources:
   - type: aws_sqs_queue
     service: sqs
     status: draft
+    # Create derived 2026-09-26, both fixture variants. Update and delete are not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsqs.html
     # `name` is known at plan time when set explicitly, so a create resolves to a
     # real ARN rather than degrading to "*". Note the SQS ARN ends in the bare
@@ -101,11 +103,11 @@ resources:
     operations:
       create:
         - sqs:CreateQueue
-        # Tag-on-create: CreateQueue accepts a Tags parameter, so no separate
-        # API call is expected — but the tagging action is still authorized.
-        # This is the same shape as iam:TagRole on CreateRole, which WAS measured
-        # to be required with no TagRole call ever appearing, and ec2:CreateTags
-        # on CreateVpc, likewise measured. REASONED here from that precedent.
+        # GATE MEASURED both directions 2026-09-26: the maximal fixture derives
+        # sqs:TagQueue and the minimal one reports it surplus. Previously reasoned
+        # from iam:TagRole and ec2:CreateTags — CreateQueue accepts a Tags
+        # parameter, so no separate API call appears and the tagging action is
+        # authorized anyway. The precedent held, and it is now measurement.
         - action: sqs:TagQueue
           when: { attribute_set: [tags, tags_all] }
       update:
@@ -124,11 +126,27 @@ resources:
         - sqs:DeleteQueue
 
     notes: >-
-      DRAFT. Names checked with accessanalyzer:ValidatePolicy on 2026-09-25 and
-      all exist. Completeness is entirely unestablished — no apply has been run
-      and no queue was created to write this entry. The one entry in this
-      database that was checked empirically needed 17 actions where 3 were
-      claimed, so assume this list is SHORT rather than long.
+      CREATE DERIVED 2026-09-26 against provider 6.66.0 from
+      derivefixtures/aws_sqs_queue: sufficiency proven, minimality proven, 5
+      attempts, and **exactly what this entry already claimed** — zero missing,
+      zero surplus.
+
+      That makes it the FIRST entry in the database to survive derivation
+      unchanged. Every previous one was wrong by omission, ten for ten, so this
+      is worth recording as the counter-example rather than treated as the norm:
+      an unmeasured entry is not necessarily wrong, it is unknown.
+
+      The tag gate is measured in both directions — see the comment on
+      sqs:TagQueue.
+
+      The fixtures use `name_prefix`, not `name`, because SQS refuses to recreate
+      a deleted queue's name for sixty seconds and the derivation loop cycles far
+      faster than that. That incidentally exercised `arn_prefix_attributes`
+      against a real apply for the first time.
+
+      UPDATE AND DELETE REMAIN UNMEASURED. Assume those lists are SHORT rather
+      than long: the one entry in this database checked by hand needed 17 actions
+      where 3 were claimed.
 
       THE FIRST THING TO CHECK: sqs:GetQueueUrl is deliberately absent from
       read_actions and is the most likely missing action in this file. The name

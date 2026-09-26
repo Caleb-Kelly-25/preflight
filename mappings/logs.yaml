@@ -50,6 +50,9 @@ resources:
   - type: aws_cloudwatch_log_group
     service: logs
     status: draft
+    # Create derived 2026-09-26 from THREE fixture variants, which is what it took
+    # to attribute two separate gates. Update and delete are not derived.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazoncloudwatchlogs.html
     # `name` is known at plan time, so a create resolves to a real ARN instead of
     # degrading to "*" — unusual and worth having. See notes for the trailing
@@ -79,18 +82,32 @@ resources:
     operations:
       create:
         - logs:CreateLogGroup
-        # CreateLogGroup accepts a tags parameter, so this is the tag-on-create
-        # shape rather than a second API call — the same as iam:TagRole on
-        # CreateRole, which was MEASURED to be required with no TagRole call ever
-        # appearing. REASONED here, not measured.
+        # GATE MEASURED both directions 2026-09-26. The tagged fixtures derive
+        # logs:TagResource; the minimal one reports it surplus. Previously reasoned
+        # from iam:TagRole on CreateRole — CreateLogGroup accepts a tags parameter,
+        # so no separate call appears and the action is authorized anyway.
         - action: logs:TagResource
           when: { attribute_set: [tags, tags_all] }
+        # GATE MEASURED both directions 2026-09-26, and this one needed a THIRD
+        # fixture to attribute. A maximal/minimal pair drops tags and retention
+        # together, which cannot show that this action is keyed to retention rather
+        # than simply required on every create. derivefixtures/…__tagsonly sets
+        # tags and NOT retention, and reports this surplus — which is the
+        # measurement that makes the gate safe rather than plausible.
+        #
         # A genuine second call: retention is not a CreateLogGroup parameter.
         - action: logs:PutRetentionPolicy
           when: { attribute_set: retention_in_days }
-        # CreateLogGroup takes kmsKeyId inline, so no AssociateKmsKey call is
-        # expected — but by the CreateRole/TagRole precedent the action may be
-        # authorized anyway. Included on the over-reporting side for that reason.
+        # STILL REASONING, and deliberately so. CreateLogGroup takes kmsKeyId
+        # inline, so no AssociateKmsKey call is expected — but by the
+        # CreateRole/TagRole precedent the action may be authorized anyway, so it
+        # is included on the over-reporting side.
+        #
+        # All three fixtures reported it surplus, which only proves the NEGATIVE
+        # direction: an unencrypted group does not need it. The positive direction
+        # is untested because it needs a KMS key, and a KMS key cannot be deleted
+        # for at least seven days and bills throughout — so every attempt would
+        # leave billable residue and break the harness's clean-account contract.
         - action: logs:AssociateKmsKey
           when: { attribute_set: kms_key_id }
       update:
@@ -111,8 +128,31 @@ resources:
         - logs:DeleteLogGroup
 
     notes: >-
-      DRAFT. Names checked with accessanalyzer:ValidatePolicy on 2026-09-25 and
-      all exist. Completeness is unestablished — no apply has been run.
+      CREATE DERIVED 2026-09-26 against provider 6.66.0, and the create list was
+      already CORRECT — zero missing across all three fixture variants. That makes
+      this the second entry ever to survive derivation unchanged, after
+      aws_sqs_queue. Worth stating plainly, because ten earlier entries were wrong
+      by omission: an unmeasured entry is unknown, not necessarily wrong.
+
+      THREE FIXTURES, because this entry has two gates and a pair cannot attribute
+      them:
+
+        aws_cloudwatch_log_group            tags + retention -> both actions
+        aws_cloudwatch_log_group__tagsonly  tags, no retention -> PutRetentionPolicy surplus
+        aws_cloudwatch_log_group__minimal   neither -> TagResource surplus too
+
+      Dropping both attributes at once would only have shown the two actions
+      becoming unnecessary together, which does not establish that
+      PutRetentionPolicy is keyed to retention rather than required on every
+      create. The tags-only variant is what settles it, and it is the method to
+      copy for any entry with more than one gate.
+
+      Minimality came back PARTIAL for the two tagged variants: at least one
+      removal produced an outcome weaker than a clean AccessDenied, so those
+      actions are kept on weaker evidence. Sufficiency is proven in all three.
+
+      logs:AssociateKmsKey remains reasoning in the positive direction — see the
+      comment on it. Update and delete are unmeasured.
 
       THE KNOWN DEFECT IN THIS ENTRY IS THE ARN, and it is the same class of
       problem as aws_lambda_layer_version. Real-world policies for CloudWatch

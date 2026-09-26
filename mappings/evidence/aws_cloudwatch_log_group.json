@@ -1,0 +1,50 @@
+{
+  "resource_type": "aws_cloudwatch_log_group",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_cloudwatch_log_group",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "partial",
+      "attempts": 8,
+      "actions": [
+        "logs:CreateLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_cloudwatch_log_group__tagsonly",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "partial",
+      "attempts": 9,
+      "actions": [
+        "logs:CreateLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource",
+        "logs:TagResource"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_cloudwatch_log_group__minimal",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 10,
+      "actions": [
+        "logs:CreateLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource"
+      ]
+    }
+  ]
+}
