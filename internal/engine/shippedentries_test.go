@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Caleb-Kelly-25/preflight/internal/engine"
@@ -106,22 +107,49 @@ func TestRoute53ARNsCarryNoRegionOrAccount(t *testing.T) {
 
 	want := "arn:aws:route53:::hostedzone/" + zoneID
 	var found bool
+	var got []string
 	for _, item := range sim.requests[0].Items {
+		got = append(got, item.ResourceARN)
 		if item.ResourceARN == want {
 			found = true
 		}
-		// The region was deliberately set to eu-west-2 above: if the entry ever
-		// starts templating it, this catches it by name rather than by shape.
-		if item.ResourceARN != want && item.ResourceARN != "*" {
-			t.Errorf("unexpected ARN %q; Route 53 ARNs carry no region or account", item.ResourceARN)
+
+		// Check the INVARIANT rather than an allowlist of expected ARNs. An
+		// earlier version of this test listed the ARNs it would accept, and went
+		// red when route53:GetChange legitimately added
+		// `arn:aws:route53:::change/*` — a correct ARN that the list had not
+		// anticipated. Asserting the property means the test objects to the thing
+		// it cares about and stays quiet about the rest.
+		//
+		// The region is deliberately set to eu-west-2 above, so if any route53
+		// ARN ever starts templating the caller's region or account, this fails.
+		if strings.HasPrefix(item.ResourceARN, "arn:") {
+			parts := strings.SplitN(item.ResourceARN, ":", 6)
+			if len(parts) >= 5 && parts[2] == "route53" {
+				if parts[3] != "" || parts[4] != "" {
+					t.Errorf("route53 ARN %q carries a region (%q) or account (%q); both fields are always empty",
+						item.ResourceARN, parts[3], parts[4])
+				}
+			}
 		}
 	}
 	if !found {
-		var got []string
-		for _, item := range sim.requests[0].Items {
-			got = append(got, item.ResourceARN)
-		}
 		t.Errorf("record was not asked against the containing hosted zone %q; asked: %v", want, got)
+	}
+
+	// The propagation poll must be asked against the change wildcard, not the
+	// zone: it is the only Route 53 action in the database whose target is not
+	// the hosted zone, and scoping it to the zone would be a false positive on
+	// every plan.
+	var pollAsked bool
+	for _, item := range sim.requests[0].Items {
+		if item.ResourceARN == "arn:aws:route53:::change/*" &&
+			slices.Contains(item.Actions, "route53:GetChange") {
+			pollAsked = true
+		}
+	}
+	if !pollAsked {
+		t.Errorf("route53:GetChange was not asked against arn:aws:route53:::change/*; asked: %v", got)
 	}
 }
 

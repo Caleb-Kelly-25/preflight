@@ -354,7 +354,20 @@ func (r Resource) validate() error {
 			return fmt.Errorf("%s: reference action %q is not of the form service:Action", r.Type, ref.Action)
 		}
 		if ref.ARNFrom == "" {
-			return fmt.Errorf("%s: reference %q has no `arn_from`; without it there is no resource to check against", r.Type, ref.Action)
+			// A FIXED-TARGET reference: no plan attribute names the resource,
+			// so `arn_format` carries the whole ARN. It must actually be one,
+			// and it must not ask for ${Name} — there is no value to fill it
+			// from, and a ${Name} left unfilled degrades the ARN to "*",
+			// silently turning a scoped check into an unscoped one.
+			if ref.ARNFormat == "" {
+				return fmt.Errorf("%s: reference %q has neither `arn_from` nor `arn_format`; without one of them there is no resource to check against", r.Type, ref.Action)
+			}
+			if strings.Contains(ref.ARNFormat, "${Name}") {
+				return fmt.Errorf("%s: reference %q uses ${Name} with no `arn_from` to fill it from", r.Type, ref.Action)
+			}
+			if ref.ARNOrName != nil {
+				return fmt.Errorf("%s: reference %q sets `arn_or_name` with no `arn_from`; there is no attribute value to classify", r.Type, ref.Action)
+			}
 		}
 		if ref.ARNOrName != nil {
 			// Without a template there is nothing to do in the bare-name half

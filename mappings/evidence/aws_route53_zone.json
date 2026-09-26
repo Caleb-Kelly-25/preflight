@@ -1,0 +1,21 @@
+{
+  "resource_type": "aws_route53_zone",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_route53_zone",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 7,
+      "actions": [
+        "route53:ChangeTagsForResource",
+        "route53:CreateHostedZone",
+        "route53:GetChange",
+        "route53:GetHostedZone",
+        "route53:ListTagsForResource"
+      ]
+    }
+  ]
+}

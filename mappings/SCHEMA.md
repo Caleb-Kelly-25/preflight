@@ -362,6 +362,34 @@ pass**, so tie it to evidence. The tagging gates came from measurement:
 ever made, and `s3:PutBucketTagging` is a genuine second call because
 `CreateBucket` does not accept tags.
 
+### Fixed-target references: an action against a resource the plan cannot name
+
+Omit `arn_from` and give `arn_format` a complete ARN with no `${Name}`:
+
+```yaml
+references:
+  - action: route53:GetChange
+    arn_format: "arn:${Partition}:route53:::change/*"
+    operations: [create, update, delete]
+```
+
+This is for an action authorised against a resource whose identity is not in the
+plan **and never could be**. Route 53 answers every change with an ephemeral
+change id that the provider then polls; no attribute holds it, so the only honest
+target is the wildcard a real policy actually grants.
+
+**The alternative is not merely imprecise, it is wrong.** `read_actions` are
+scoped to the resource's own ARN, so putting `route53:GetChange` there would ask
+AWS whether the caller may call it on a *hostedzone* — a question that always
+answers implicit-deny, because the action does not apply to that resource type.
+A policy correctly granting it on `change/*` would then be reported as a missing
+permission on every Route 53 plan.
+
+`${Partition}`, `${Account}` and `${Region}` are still filled from the caller.
+`${Name}` is rejected at load time: there is no value to fill it from, and an
+unfilled placeholder degrades the whole ARN to `*`, silently turning a scoped
+check into an unscoped one.
+
 ## `status` and `verified_operations` need evidence
 
 Both are verification claims, and a claim needs a record. `mappings/evidence/<type>.json`

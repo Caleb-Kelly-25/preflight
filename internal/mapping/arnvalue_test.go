@@ -360,3 +360,78 @@ func TestReferenceWithoutARNOrNameIsUnchanged(t *testing.T) {
 		t.Errorf("templated reference changed behaviour: %+v", got)
 	}
 }
+
+// TestFixedTargetReference covers a `references` entry with no `arn_from`: the
+// action is authorised against a resource the plan cannot name and never could.
+// route53:GetChange is the motivating case — Route 53 hands back an ephemeral
+// change id that the provider polls, so the only honest target is the wildcard a
+// real policy grants.
+func TestFixedTargetReference(t *testing.T) {
+	res := Resource{
+		Type:    "aws_route53_zone",
+		Service: "route53",
+		References: []Reference{{
+			Action:    "route53:GetChange",
+			ARNFormat: "arn:${Partition}:route53:::change/*",
+		}},
+		Operations: map[Operation][]Action{OpCreate: {{Action: "route53:CreateHostedZone"}}},
+	}
+
+	// The caller's partition is filled in; region and account are absent from the
+	// template, which is correct for Route 53 and must not be "helpfully" added.
+	ctx := ARNContext{Partition: "aws", Account: "123456789012", Region: "eu-west-2"}
+	got := res.ResolveReferences(OpCreate, ctx, nil, nil, nil, nil)
+	if len(got) != 1 {
+		t.Fatalf("got %d referenced actions, want 1: %+v", len(got), got)
+	}
+	if got[0].ARN != "arn:aws:route53:::change/*" {
+		t.Errorf("ARN = %q, want the fixed change wildcard", got[0].ARN)
+	}
+	// Exact, because every placeholder in the template was filled. A wildcard
+	// inside the ARN is the policy's own shape, not an unresolved value, so
+	// downgrading here would caveat a finding that needs no caveat.
+	if !got[0].Exact {
+		t.Error("want exact: the template resolved completely")
+	}
+
+	// No attributes are consulted at all, so an empty plan resolves it just the
+	// same. That is the property that makes the form usable for an id that exists
+	// only at apply time.
+	if got2 := res.ResolveReferences(OpCreate, ctx, map[string]any{}, nil, nil, nil); len(got2) != 1 || got2[0].ARN != got[0].ARN {
+		t.Errorf("resolution depended on plan attributes: %+v", got2)
+	}
+}
+
+// TestFixedTargetReferenceRejectsName pins the load-time rejection. A ${Name}
+// with no `arn_from` has nothing to fill it from, and an unfilled placeholder
+// degrades the whole ARN to "*" — silently turning a scoped check into an
+// unscoped one, which is the direction that hides a real denial.
+func TestFixedTargetReferenceRejectsName(t *testing.T) {
+	for name, ref := range map[string]Reference{
+		"${Name} with nothing to fill it": {
+			Action:    "route53:GetChange",
+			ARNFormat: "arn:${Partition}:route53:::change/${Name}",
+		},
+		"neither arn_from nor arn_format": {
+			Action: "route53:GetChange",
+		},
+		"arn_or_name with no attribute to classify": {
+			Action:    "route53:GetChange",
+			ARNFormat: "arn:${Partition}:route53:::change/*",
+			ARNOrName: &ARNOrName{Service: "route53", ResourceType: "change"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := Resource{
+				Type:       "aws_probe",
+				Service:    "route53",
+				Status:     StatusDraft,
+				References: []Reference{ref},
+				Operations: map[Operation][]Action{OpCreate: {{Action: "route53:CreateHostedZone"}}},
+			}
+			if err := res.validate(); err == nil {
+				t.Error("validate accepted it")
+			}
+		})
+	}
+}

@@ -45,6 +45,20 @@ func (r Resource) ResolveReferences(op Operation, ctx ARNContext, attrs, unknown
 // a complete ARN already (aws_lambda_function.role); ARNFormat covers the case
 // where it holds a bare name instead (aws_iam_instance_profile.role).
 func (ref Reference) buildARN(ctx ARNContext, attrs, unknown map[string]any) (string, bool) {
+	// A reference with no `arn_from` names a FIXED target: the action is
+	// authorised against a resource whose identity is not in the plan and never
+	// could be. route53:GetChange is the case — Route 53 hands back an ephemeral
+	// change id that the provider polls, and no plan attribute holds it, so the
+	// only honest target is the change/* wildcard a real policy grants.
+	//
+	// The alternative was to fold such an action into read_actions, which scopes
+	// it to the RESOURCE's own ARN. That is worse than imprecise, it is wrong:
+	// asking AWS whether the caller may GetChange on a hostedzone ARN gets an
+	// implicit deny, so a policy correctly granting it on change/* would be
+	// reported as a missing permission on every plan.
+	if ref.ARNFrom == "" {
+		return templateARN(ref.ARNFormat, ctx, "")
+	}
 	if isUnknown(unknown, ref.ARNFrom) {
 		return "*", false
 	}
@@ -73,11 +87,30 @@ func (ref Reference) buildARN(ctx ARNContext, attrs, unknown map[string]any) (st
 		return v, true
 	}
 
+	return templateARN(ref.ARNFormat, ctx, v)
+}
+
+// templateARN fills ${Partition}, ${Account}, ${Region} from the caller and
+// ${Name} from the referenced attribute's value.
+//
+// Any placeholder it cannot fill collapses the whole ARN to "*" and exact=false,
+// rather than emitting a half-substituted string. A partially templated ARN
+// would match no policy at all while looking like a real target, which reads as
+// a permission gap that is not there.
+//
+// `name` is empty for a fixed-target reference, in which case a ${Name} in the
+// template is unfillable and the ARN degrades — correctly, since such a template
+// is a mistake rather than a wildcard.
+func templateARN(format string, ctx ARNContext, name string) (string, bool) {
 	resolved := true
-	out := varPattern.ReplaceAllStringFunc(ref.ARNFormat, func(match string) string {
+	out := varPattern.ReplaceAllStringFunc(format, func(match string) string {
 		switch varPattern.FindStringSubmatch(match)[1] {
 		case "Name":
-			return v
+			if name == "" {
+				resolved = false
+				return match
+			}
+			return name
 		case "Partition":
 			if ctx.Partition == "" {
 				resolved = false

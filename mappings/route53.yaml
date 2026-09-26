@@ -3,10 +3,11 @@
 # Names checked 2026-09-26 against AWS's machine-readable service reference, not
 # a docs page.
 #
-# COMPLETENESS IS UNESTABLISHED. Nothing here has been derived. On this
-# database's record that means these entries are probably missing something —
-# every entry whose create path was later derived turned out to be wrong, and
-# always by omission. Both are `draft`, so findings are capped at `Likely`.
+# aws_route53_zone's CREATE PATH IS DERIVED (2026-09-26, provider 6.66.0) and was
+# wrong by omission, like every other entry ever measured: route53:GetChange was
+# missing. Its update and delete paths, and everything about aws_route53_record,
+# are still reasoning. Both entries stay `draft`, so findings are capped at
+# `Likely`.
 #
 # ROUTE 53 ARNs ARE GLOBAL, and this is the one thing about the service that
 # breaks an assumption made everywhere else in the database:
@@ -53,6 +54,29 @@ resources:
       - route53:GetHostedZone
       - route53:ListTagsForResource
 
+    # route53:GetChange — a FIXED-TARGET reference, and the reason that schema
+    # form exists.
+    #
+    # Route 53 answers a zone or record change with an ephemeral change id, and
+    # the provider polls GetChange on it until the change has propagated to all
+    # of Route 53's name servers. It is a real call on the create path and it was
+    # MISSING from this file until it was measured on 2026-09-26.
+    #
+    # It cannot go in `read_actions`. Those are scoped to the resource's own ARN,
+    # so the engine would ask AWS whether the caller may GetChange on a
+    # *hostedzone* — a question whose answer is always an implicit deny, because
+    # the action does not apply to that resource type. A policy correctly granting
+    # GetChange on change/* would then be reported as a missing permission on
+    # every Route 53 plan.
+    #
+    # No plan attribute holds a change id and none ever could, so the target is
+    # the wildcard a real policy actually grants. That is what AWS's own
+    # documentation shows, because the id is not knowable in advance by anyone.
+    references:
+      - action: route53:GetChange
+        arn_format: "arn:${Partition}:route53:::change/*"
+        operations: [create, update, delete]
+
     operations:
       create:
         # CreateHostedZone authorises against "*" ONLY — the service reference
@@ -77,28 +101,45 @@ resources:
         - route53:DeleteHostedZone
 
     notes: >-
-      DRAFT. Names checked 2026-09-26; completeness unestablished.
+      CREATE DERIVED 2026-09-26 against provider 6.66.0 from
+      derivefixtures/aws_route53_zone: sufficiency proven, minimality proven,
+      7 attempts. A role holding exactly route53:CreateHostedZone,
+      route53:ChangeTagsForResource, route53:GetChange, route53:GetHostedZone and
+      route53:ListTagsForResource creates a tagged public zone, and removing any
+      one of the five fails.
 
-      Cheap to derive — a hosted zone costs $0.50/month and creates in seconds,
-      with no VPC or subnet needed for a public zone. This is the most affordable
-      unmeasured entry in the database and a good next target.
+      Deriving this was affordable in a way most of the database is not: a public
+      hosted zone needs no VPC, creates in seconds, and AWS does not charge for
+      one deleted within twelve hours — so a run that creates and destroys a dozen
+      costs nothing.
 
-      Two things a derivation should settle. Whether deleting a zone requires
-      route53:ChangeResourceRecordSets, because AWS refuses to delete a zone that
-      still holds records other than its own NS and SOA sets, and the provider
-      may remove them first — if it does, that action is missing from `delete`
-      here and this entry under-reports. And whether
-      route53:DisassociateVPCFromHostedZone is needed when a VPC association is
-      removed rather than added; only the Associate half is listed, which is
-      reasoning, not measurement.
+      STILL DRAFT. Update and delete are unmeasured, and two specific questions
+      remain open in the dangerous direction:
 
-      route53:GetChange is deliberately NOT listed. Route 53 returns a change id
-      that the provider polls until the change propagates, and that poll is a
-      real call — but it is authorised against the `change` resource type, not
-      the hosted zone, so it belongs in `references` against an attribute holding
-      a change id. No such attribute exists in the plan. The omission is recorded
-      rather than guessed at, and it is the most likely thing to be missing from
-      this entry.
+      Whether deleting a zone requires route53:ChangeResourceRecordSets. AWS
+      refuses to delete a zone still holding records beyond its own NS and SOA
+      sets, and the provider may remove them first. The harness cannot settle it —
+      teardown runs with operator credentials, so a missing delete permission
+      never surfaces.
+
+      Whether route53:DisassociateVPCFromHostedZone is needed when a VPC
+      association is removed rather than added. Only the Associate half is listed.
+      That is the same shape as the permissions-boundary pair on aws_iam_role,
+      where measuring only one direction WOULD have shipped a false pass, so it
+      should be measured rather than reasoned — it needs a private zone, hence a
+      VPC, hence a fixture that is no longer about one resource type.
+
+      route53:GetChange WAS missing, and this entry's previous notes named it as
+      "the most likely thing to be missing" while leaving it out. It was — the
+      derivation found it, which is a second instance of a documented gap being a
+      shipped bug rather than a known limitation.
+
+      Fixing it needed a small schema addition: a `references` entry with no
+      `arn_from`, whose `arn_format` is a fixed ARN. GetChange is authorised
+      against the ephemeral `change` resource, no plan attribute holds a change
+      id and none could, and folding it into read_actions would have scoped it to
+      the hosted zone — producing a false POSITIVE on every Route 53 plan. See
+      the comment on the reference.
 
   - type: aws_route53_record
     service: route53
@@ -116,6 +157,21 @@ resources:
     # GetResourceRecordSet call.
     read_actions:
       - route53:ListResourceRecordSets
+
+    # Same fixed-target reference as the zone entry, and for the same reason:
+    # ChangeResourceRecordSets returns a change id the provider polls.
+    #
+    # UNMEASURED HERE. It was measured for aws_route53_zone, where it was missing,
+    # and a record change goes through the identical propagation wait — so
+    # omitting it would almost certainly be a false pass. It is listed on the
+    # reasoning that the mechanism is the same call on the same service, which is
+    # weaker than measurement and is why this entry stays draft. Deriving it needs
+    # a fixture whose hosted zone is created out of band, so that exactly one
+    # resource type is in play.
+    references:
+      - action: route53:GetChange
+        arn_format: "arn:${Partition}:route53:::change/*"
+        operations: [create, update, delete]
 
     # One API call covers create, update and delete: ChangeResourceRecordSets
     # takes CREATE, UPSERT and DELETE actions in its change batch. So all three
@@ -147,5 +203,6 @@ resources:
       recoverable direction, and it is the first thing to fix if this entry is
       taken further.
 
-      Like the zone entry, route53:GetChange is not listed. See that entry's
-      notes.
+      route53:GetChange is listed, on reasoning rather than measurement: it was
+      measured missing for aws_route53_zone and a record change goes through the
+      identical propagation wait. That is the weakest claim in this entry.
