@@ -140,7 +140,17 @@ func run(args []string, stdout, stderr *os.File) error {
 	// report the create path under the name "update". A wrong mapping presented
 	// as measured is the one failure this whole tool exists to prevent, so the
 	// driver would rather not run at all.
-	if *operation != "create" {
+	// Which lifecycle step the scratch role performs. Apply for create and update;
+	// destroy for delete.
+	measure := derive.StepApply
+
+	switch *operation {
+	case "update":
+		// An update needs a BEFORE and an AFTER, so the fixture must be able to
+		// express two shapes. Refusing without a `phase` variable is the point:
+		// otherwise both phases apply the same configuration, the scratch role
+		// performs the create, and the run reports the create path labelled
+		// "update".
 		phased, err := fixtureHasPhase(workDir)
 		if err != nil {
 			return fmt.Errorf("inspecting the fixture: %w", err)
@@ -151,8 +161,17 @@ func run(args []string, stdout, stderr *os.File) error {
 				"the create path mislabelled as %s. See derivefixtures/README.md",
 				*operation, *fixtureDir, *operation)
 		}
+		applier.SetupApplies = true
 		applier.SetupVars = []string{"-var", "phase=1"}
 		applier.ApplyVars = []string{"-var", "phase=2"}
+
+	case "delete":
+		// A delete needs NO second shape and no phase variable: the same fixture
+		// is applied with operator credentials and then destroyed by the scratch
+		// role. So an ordinary create fixture derives a delete path unchanged,
+		// which is why this needs no new fixtures at all.
+		applier.SetupApplies = true
+		measure = derive.StepDestroy
 	}
 
 	// Teardown runs on every exit path, including Ctrl-C, on a context that is
@@ -179,6 +198,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		Applier:       applier,
 		MaxAttempts:   *maxAttempts,
 		AttemptBudget: *budget,
+		Measure:       measure,
 		Log:           stdout,
 	}
 	res, derr := d.Derive(ctx, seed)

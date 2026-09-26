@@ -34,10 +34,45 @@ type Applier interface {
 	// Apply runs terraform apply under the scratch role's credentials,
 	// returning OutcomeStalled rather than blocking past budget.
 	Apply(ctx context.Context, budget time.Duration) Outcome
+
+	// MeasureDestroy runs terraform destroy under the SCRATCH role's credentials
+	// and reports what happened. Its failure is EVIDENCE, not an error.
+	//
+	// This is how a delete path gets measured, and it exists because the original
+	// design conflated two jobs that only looked like one. "Teardown must use
+	// operator credentials" is right about the CLEANUP — a leaked resource makes
+	// the next attempt lie — but it was wrongly applied to the MEASUREMENT too,
+	// which made delete paths look structurally underivable. They are not: the
+	// scratch role destroys to be measured, and Destroy then runs with operator
+	// credentials to guarantee the account ends clean.
+	//
+	// The caller MUST call Destroy afterwards on every path, exactly as it does
+	// after Apply.
+	MeasureDestroy(ctx context.Context, budget time.Duration) Outcome
+
 	// Destroy tears the fixture down. It MUST run with operator credentials,
-	// never the scratch role's: teardown cannot be allowed to fail for want of
-	// the very permission being searched for.
+	// never the scratch role's: CLEANUP cannot be allowed to fail for want of the
+	// very permission being searched for. See MeasureDestroy for the measurement.
 	Destroy(ctx context.Context) error
+}
+
+// MeasuredStep selects which lifecycle step the scratch role performs, and so
+// which operation's permissions the run is measuring.
+type MeasuredStep int
+
+const (
+	// StepApply measures a create or an update: the scratch role applies.
+	StepApply MeasuredStep = iota
+	// StepDestroy measures a delete: Setup creates the resource with operator
+	// credentials and the scratch role destroys it.
+	StepDestroy
+)
+
+func (s MeasuredStep) String() string {
+	if s == StepDestroy {
+		return "destroy"
+	}
+	return "apply"
 }
 
 // Deriver runs the loop.
@@ -50,6 +85,10 @@ type Deriver struct {
 	MaxAttempts int
 	// AttemptBudget is how long one apply may run before it counts as stalled.
 	AttemptBudget time.Duration
+
+	// Measure selects which step the scratch role performs. The zero value
+	// measures an apply, which is what create and update need.
+	Measure MeasuredStep
 
 	Log io.Writer
 }
@@ -265,9 +304,19 @@ func (d *Deriver) attempt(ctx context.Context, res *Result, actions []string, bu
 		return out, nil
 	}
 
-	out := d.Applier.Apply(ctx, budget)
+	// The measured step. For a delete it is the destroy itself, run under the
+	// scratch role; Setup above has already created the resource with operator
+	// credentials, so what gets measured is the deletion alone.
+	var out Outcome
+	if d.Measure == StepDestroy {
+		out = d.Applier.MeasureDestroy(ctx, budget)
+	} else {
+		out = d.Applier.Apply(ctx, budget)
+	}
 
-	// Teardown runs on every path, including the ones that failed.
+	// Cleanup runs on every path, including the ones that failed — and including
+	// after a MeasureDestroy that was itself denied, which is precisely when
+	// something is left behind. With operator credentials, always.
 	destroyErr := d.Applier.Destroy(ctx)
 
 	res.Attempts = append(res.Attempts, Attempt{Index: idx, Granted: actions, Outcome: out})

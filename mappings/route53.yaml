@@ -40,7 +40,7 @@ resources:
     service: route53
     status: draft
     # Create derived 2026-09-26 (see notes and mappings/evidence/). Update and
-    # delete are not, and delete structurally cannot be by the harness.
+    # delete are not yet run, though both are now derivable.
     verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonroute53.html
     # Empty region and account are correct, not an oversight. See the header.
@@ -121,9 +121,10 @@ resources:
 
       Whether deleting a zone requires route53:ChangeResourceRecordSets. AWS
       refuses to delete a zone still holding records beyond its own NS and SOA
-      sets, and the provider may remove them first. The harness cannot settle it —
-      teardown runs with operator credentials, so a missing delete permission
-      never surfaces.
+      sets, and the provider may remove them first. This IS now settleable —
+      MeasureDestroy derives delete paths as of 2026-09-26 — and it is the obvious
+      next run for this entry, needing no new fixture. The fixture already sets
+      force_destroy, which is the configuration under which the question matters.
 
       Whether route53:DisassociateVPCFromHostedZone is needed when a VPC
       association is removed rather than added. Only the Associate half is listed.

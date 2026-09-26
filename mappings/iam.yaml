@@ -44,9 +44,9 @@ resources:
     service: iam
     # VERIFIED 2026-09-26: every operation now has a measurement behind it, and
     # the evidence is in mappings/evidence/aws_iam_role.json rather than in this
-    # prose. Read the notes for what "verified" does and does not cover here —
-    # in particular, delete rests on a pre-harness hand run the harness
-    # structurally cannot reproduce.
+    # prose. All three operations are machine-measured against provider 6.66.0;
+    # delete was reproduced by the harness on 2026-09-26, which retired the last
+    # pre-harness claim in this entry.
     status: verified
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
@@ -170,12 +170,22 @@ resources:
       role WITH a boundary needs no action beyond iam:CreateRole, because
       CreateRole takes the boundary as a parameter and IAM authorises it there.
 
-      THE HONEST CAVEAT ON `verified`. Delete rests on the 2026-09-01 hand run at
-      provider 5.100.0 and has not been reproduced since, because the harness
-      structurally cannot derive a delete path at all — teardown always runs with
-      operator credentials, so a missing delete permission can never surface. It
-      is the weakest of the three claims and the one to re-establish by hand if
-      this entry is ever doubted.
+      DELETE DERIVED 2026-09-26 against provider 6.66.0, and it reproduced the
+      2026-09-01 hand run EXACTLY: the same five actions, zero missing, zero
+      surplus, minimality proven. iam:ListInstanceProfilesForRole is confirmed
+      load-bearing on delete.
+
+      That retired the weakest claim in this entry. Until then delete rested on a
+      hand measurement two provider major versions old that nothing could
+      reproduce, because the harness was believed unable to derive a delete path at
+      all. It could: "teardown must use operator credentials" is right about the
+      cleanup and was wrongly applied to the measurement as well. The scratch role
+      now destroys to be measured, and the operator destroy still runs afterwards
+      to guarantee the account ends clean.
+
+      It also needed no new fixture — a delete derivation reuses the create
+      fixture, applying it with operator credentials and then destroying it under
+      the scratch role.
 
       Separately: any OTHER resource that hands this role to a service (an ECS
       task definition, a Lambda function) needs iam:PassRole on it. That is a
@@ -294,8 +304,9 @@ resources:
       fixture that applies its change once, and dropping it would be a false
       pass for any policy already updated five times.
 
-      delete remains unverified: teardown always runs with operator credentials,
-      so the loop structurally cannot derive a delete path.
+      delete remains unmeasured, but is now derivable — see aws_iam_role, whose
+      delete path was measured on 2026-09-26. It reuses the create fixture, so this
+      entry needs no new one; it simply has not been run yet.
 
   - type: aws_iam_role_policy_attachment
     service: iam
@@ -325,9 +336,12 @@ resources:
       therefore wrong in the dangerous direction — it would have reported
       "allowed" for a deploy that cannot succeed.
 
-      Update and delete are unverified. The harness tears down with operator
-      credentials so that teardown cannot fail for want of the permission
-      being searched for, which means delete is never exercised.
+      Update and delete are unmeasured, but both are now derivable. Delete in
+      particular needs NO new fixture — it reuses the create fixture, applying it
+      with operator credentials and then destroying it under the scratch role.
+      That became possible on 2026-09-26, when the harness stopped conflating the
+      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
+      has not been run yet.
 
   - type: aws_iam_role_policy
     service: iam

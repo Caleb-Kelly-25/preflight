@@ -292,9 +292,13 @@ build tag, `PREFLIGHT_DERIVE_ACCOUNT` checked against a **live**
   person makes, and the PR should say how completeness was established.
 - It DOES write `mappings/evidence/<type>.json`. That is not the same thing: the
   YAML holds a claim, the evidence file holds a transcript. See below.
-- **No delete path can be derived**, structurally: teardown always runs with
-  operator credentials, so a missing delete permission can never surface. Delete
-  paths marked verified were established some other way.
+- **Delete paths ARE derivable**, via `MeasureDestroy`. This was believed
+  structural for most of the project and was not. "Teardown must use operator
+  credentials" is right about the CLEANUP — a leaked resource makes the next
+  attempt lie — but it was wrongly applied to the MEASUREMENT too, and the two are
+  separate calls: the scratch role destroys to be measured, then `Destroy` runs
+  with operator credentials to guarantee the account ends clean. A delete needs no
+  new fixture; it reuses the create fixture. See below.
 
 ### `verified` is machine-checkable, and the check is asymmetric
 
@@ -319,6 +323,37 @@ the asymmetry against being "tidied up".
 
 Evidence files are read from disk, not embedded: they are a maintainer and CI
 artifact and have no business in the shipped binary.
+
+### Deriving a delete: measure the teardown, then clean up anyway
+
+```
+make derive TYPE=aws_iam_role OPERATION=delete FIXTURE=./derivefixtures/aws_iam_role
+```
+
+**No new fixture.** A delete reuses the create fixture: `Setup` applies it with
+operator credentials, the scratch role destroys it, and that destroy IS the
+measurement. `Destroy` then runs with operator credentials on every path.
+
+The separation is the whole idea, and it was missing until 2026-09-26. The old
+`Destroy` did both jobs at once, so a missing delete permission could never
+surface and delete paths looked structurally underivable — the estimate carried
+~19 hand measurements that were never necessary. Two rules keep it correct:
+
+- **The measuring destroy may fail. The cleaning destroy may not.** A DENIED
+  destroy is exactly when a resource is guaranteed to be left standing, so
+  skipping the operator cleanup would leak on precisely the attempts that matter.
+  `TestDeniedDestroyStillRunsTheOperatorCleanup` guards this.
+- **`Apply` must never run during a delete derivation.** The resource is created
+  by `Setup` under operator credentials; if the scratch role created it, the run
+  would measure create and delete together.
+
+Terraform refreshes before destroying, so a missing READ permission denies during
+refresh. That is correct evidence, not noise — `read_actions` are genuinely
+required for delete, which is why the schema unions them into all three
+operations.
+
+First run, 2026-09-26: `aws_iam_role`'s delete reproduced the 2026-09-01 hand
+measurement exactly at provider 6.66.0 — same five actions, minimality proven.
 
 ### Deriving an update: the two-phase fixture
 

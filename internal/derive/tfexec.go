@@ -59,15 +59,27 @@ type TerraformApplier struct {
 	// as written.
 	SetupVars []string
 	ApplyVars []string
+
+	// SetupApplies makes Setup apply the fixture with OPERATOR credentials before
+	// the measured step runs.
+	//
+	// Explicit rather than inferred from SetupVars, because a DELETE measurement
+	// needs a before-state and no variables at all: the same fixture is applied
+	// and then destroyed. Inferring it would have silently skipped Setup for every
+	// delete, leaving the scratch role destroying nothing and every attempt
+	// reporting success.
+	//
+	// Wrong for a create, where it would create the very resource being measured.
+	SetupApplies bool
 }
 
 // Setup applies the "before" shape with OPERATOR credentials.
 //
-// No-op when SetupVars is empty, which is the create case: there is nothing for
-// a create to act on, and applying the fixture here would create the very
+// No-op unless SetupApplies is set, which is the create case: there is nothing
+// for a create to act on, and applying the fixture here would create the very
 // resource the measured apply is supposed to create.
 func (t *TerraformApplier) Setup(ctx context.Context, budget time.Duration) error {
-	if len(t.SetupVars) == 0 {
+	if !t.SetupApplies {
 		return nil
 	}
 	args := append([]string{"apply", "-auto-approve", "-input=false", "-no-color"}, t.stateArgs()...)
@@ -113,6 +125,19 @@ func (t *TerraformApplier) Apply(ctx context.Context, budget time.Duration) Outc
 		return Outcome{Kind: OutcomeSuccess, Elapsed: elapsed}
 	}
 
+	return classify(out, elapsed)
+}
+
+// classify turns one terraform run's output into an Outcome.
+//
+// Shared by Apply and MeasureDestroy on purpose. The two measure opposite ends of
+// a resource's life but the evidence reads identically — a named denial, an opaque
+// refusal, a stall, or an unrelated failure — and two copies of this logic would
+// eventually disagree about what counts as a denial. That disagreement would be
+// invisible: a delete path would quietly classify a real denial as a plain
+// failure, and the loop would report "failed for a non-IAM reason" for a missing
+// permission.
+func classify(out string, elapsed time.Duration) Outcome {
 	actions, opaque := ParseDenial(out)
 	switch {
 	case len(actions) > 0:
@@ -122,6 +147,36 @@ func (t *TerraformApplier) Apply(ctx context.Context, budget time.Duration) Outc
 	default:
 		return Outcome{Kind: OutcomeFailed, Elapsed: elapsed, Detail: tail(out)}
 	}
+}
+
+// MeasureDestroy destroys under the SCRATCH role and reports the outcome. See the
+// Applier interface for why this is separate from Destroy.
+//
+// The caller must still call Destroy afterwards. A denied destroy leaves the
+// resource standing — that is the whole point of the measurement — so skipping the
+// operator cleanup would leak exactly when a leak is guaranteed.
+func (t *TerraformApplier) MeasureDestroy(ctx context.Context, budget time.Duration) Outcome {
+	start := time.Now()
+	args := append([]string{"destroy", "-auto-approve", "-input=false", "-no-color"}, t.stateArgs()...)
+	args = append(args, t.ApplyVars...)
+	out, timedOut, err := t.run(ctx, budget, t.applyEnv(), args...)
+	elapsed := time.Since(start)
+
+	if timedOut {
+		// Same hazard as a stalled apply, and worse in one respect: the destroy
+		// was killed mid-flight, so some resources may be gone and unrecorded
+		// while others remain. The loop treats a stall as evidence and then stops.
+		return Outcome{
+			Kind:      OutcomeStalled,
+			StalledAt: lastResourceMentioned(out),
+			Elapsed:   elapsed,
+			Detail:    tail(out),
+		}
+	}
+	if err == nil {
+		return Outcome{Kind: OutcomeSuccess, Elapsed: elapsed}
+	}
+	return classify(out, elapsed)
 }
 
 // Destroy tears the fixture down with OPERATOR credentials, never the scratch

@@ -122,9 +122,12 @@ resources:
       therefore wrong in the dangerous direction — it would have reported
       "allowed" for a deploy that cannot succeed.
 
-      Update and delete are unverified. The harness tears down with operator
-      credentials so that teardown cannot fail for want of the permission
-      being searched for, which means delete is never exercised.
+      Update and delete are unmeasured, but both are now derivable. Delete in
+      particular needs NO new fixture — it reuses the create fixture, applying it
+      with operator credentials and then destroying it under the scratch role.
+      That became possible on 2026-09-26, when the harness stopped conflating the
+      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
+      has not been run yet.
 
   - type: aws_s3_bucket_versioning
     service: s3
@@ -161,9 +164,12 @@ resources:
       non-denial outcome, so that action is kept on weaker evidence than a clean
       AccessDenied.
 
-      Update and delete are unverified. The harness tears down with operator
-      credentials so that teardown cannot fail for want of the permission
-      being searched for, which means delete is never exercised.
+      Update and delete are unmeasured, but both are now derivable. Delete in
+      particular needs NO new fixture — it reuses the create fixture, applying it
+      with operator credentials and then destroying it under the scratch role.
+      That became possible on 2026-09-26, when the harness stopped conflating the
+      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
+      has not been run yet.
 
       Destroying this resource does not remove versioning; Terraform suspends
       it, which is still a PutBucketVersioning call.
@@ -197,9 +203,12 @@ resources:
       therefore wrong in the dangerous direction — it would have reported
       "allowed" for a deploy that cannot succeed.
 
-      Update and delete are unverified. The harness tears down with operator
-      credentials so that teardown cannot fail for want of the permission
-      being searched for, which means delete is never exercised.
+      Update and delete are unmeasured, but both are now derivable. Delete in
+      particular needs NO new fixture — it reuses the create fixture, applying it
+      with operator credentials and then destroying it under the scratch role.
+      That became possible on 2026-09-26, when the harness stopped conflating the
+      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
+      has not been run yet.
 
   - type: aws_s3_bucket_server_side_encryption_configuration
     service: s3
@@ -231,9 +240,12 @@ resources:
       therefore wrong in the dangerous direction — it would have reported
       "allowed" for a deploy that cannot succeed.
 
-      Update and delete are unverified. The harness tears down with operator
-      credentials so that teardown cannot fail for want of the permission
-      being searched for, which means delete is never exercised.
+      Update and delete are unmeasured, but both are now derivable. Delete in
+      particular needs NO new fixture — it reuses the create fixture, applying it
+      with operator credentials and then destroying it under the scratch role.
+      That became possible on 2026-09-26, when the harness stopped conflating the
+      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
+      has not been run yet.
 
       The IAM action is s3:PutEncryptionConfiguration, NOT s3:PutBucketEncryption
       — the API operation and the IAM action have different names here. AWS's

@@ -46,8 +46,9 @@ type fakeApplier struct {
 	// setupFails models a "before" apply that cannot be established.
 	setupFails bool
 
-	applies  int
-	destroys int
+	applies         int
+	destroys        int
+	measureDestroys int
 
 	// grantsAtSetup records how many grants had happened each time Setup ran.
 	// Ordering is the whole point of Setup, so it is asserted rather than assumed:
@@ -95,6 +96,31 @@ func (a *fakeApplier) Apply(context.Context, time.Duration) derive.Outcome {
 			DeniedActions: missing[:1], // AWS reports one at a time
 			Detail:        "not authorized to perform: " + missing[0],
 		}
+	}
+}
+
+// MeasureDestroy models the delete measurement: the scratch role destroys, and a
+// missing action denies. It answers from the same `required` set as Apply, so a
+// test can give it the answer and assert the loop recovers it.
+func (a *fakeApplier) MeasureDestroy(context.Context, time.Duration) derive.Outcome {
+	a.measureDestroys++
+	granted := a.currentGrant()
+	var missing []string
+	for _, need := range a.required {
+		if !slices.Contains(granted, need) {
+			missing = append(missing, need)
+		}
+	}
+	if len(missing) == 0 {
+		return derive.Outcome{Kind: derive.OutcomeSuccess}
+	}
+	if a.opaque {
+		return derive.Outcome{Kind: derive.OutcomeOpaque, Detail: "UnauthorizedOperation"}
+	}
+	return derive.Outcome{
+		Kind:          derive.OutcomeDenied,
+		DeniedActions: []string{missing[0]},
+		Detail:        "is not authorized to perform: " + missing[0],
 	}
 }
 
@@ -395,4 +421,100 @@ func hasWarningContaining(warnings []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestDeleteIsMeasuredByDestroyingUnderTheScratchRole covers the change that made
+// delete paths derivable at all.
+//
+// The harness used to treat "teardown must use operator credentials" as applying
+// to the measurement as well as the cleanup, which made a missing delete
+// permission structurally unable to surface — deletes could only be established by
+// hand. Those are two different jobs: the scratch role destroys to be MEASURED,
+// and Destroy then runs with operator credentials to guarantee the account ends
+// clean.
+func TestDeleteIsMeasuredByDestroyingUnderTheScratchRole(t *testing.T) {
+	truth := []string{"s3:DeleteBucket", "s3:GetBucketTagging", "s3:ListBucket"}
+	g := &fakeGrantor{failOn: -1}
+	a := &fakeApplier{grantor: g, required: truth}
+	d := &derive.Deriver{
+		Grantor: g, Applier: a,
+		MaxAttempts: 8, AttemptBudget: time.Second,
+		Measure: derive.StepDestroy,
+	}
+
+	// Seed with only one of the three: the loop has to discover the rest from
+	// denials raised by the destroy, which is the whole mechanism.
+	res, err := d.Derive(context.Background(), []string{"s3:DeleteBucket"})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if res.Sufficiency != derive.ConfidenceProven {
+		t.Fatalf("Sufficiency=%v, want proven; warnings=%v", res.Sufficiency, res.Warnings)
+	}
+	if !slices.Equal(res.Sufficient, truth) {
+		t.Errorf("derived %v, want %v", res.Sufficient, truth)
+	}
+	if res.Minimal != derive.ConfidenceProven {
+		t.Errorf("Minimal=%v, want proven", res.Minimal)
+	}
+
+	// The scratch role must never have applied: Setup creates the resource with
+	// operator credentials, so the create is not folded into the measurement.
+	if a.applies != 0 {
+		t.Errorf("Apply ran %d times during a delete derivation; the create must not be measured", a.applies)
+	}
+	if a.measureDestroys == 0 {
+		t.Error("MeasureDestroy never ran, so nothing was measured under the scratch role")
+	}
+
+	// Every attempt needs its own resource to delete, so Setup runs each time.
+	if len(a.grantsAtSetup) != len(res.Attempts) {
+		t.Errorf("setups=%d attempts=%d; a delete measurement needs a fresh resource per attempt",
+			len(a.grantsAtSetup), len(res.Attempts))
+	}
+}
+
+// TestDeniedDestroyStillRunsTheOperatorCleanup is the safety half, and the reason
+// the two calls stay separate.
+//
+// A DENIED destroy is exactly the case where a resource is guaranteed to be left
+// standing — the measurement succeeded by failing. Skipping the operator cleanup
+// there would leak on precisely the attempts that matter, and every later attempt
+// would measure against an account that already holds the resource, reporting a
+// delete as permitted when it was not.
+func TestDeniedDestroyStillRunsTheOperatorCleanup(t *testing.T) {
+	truth := []string{"s3:DeleteBucket", "s3:ListBucket"}
+	g := &fakeGrantor{failOn: -1}
+	a := &fakeApplier{grantor: g, required: truth}
+	d := &derive.Deriver{
+		Grantor: g, Applier: a,
+		MaxAttempts: 8, AttemptBudget: time.Second,
+		Measure: derive.StepDestroy,
+	}
+
+	// Seeded short on purpose, so the first attempts are denied.
+	if _, err := d.Derive(context.Background(), []string{"s3:DeleteBucket"}); err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if a.destroys != a.measureDestroys {
+		t.Errorf("operator cleanups=%d, measured destroys=%d; cleanup must follow EVERY measurement, "+
+			"especially the denied ones", a.destroys, a.measureDestroys)
+	}
+}
+
+// TestCreateNeverMeasuresTheDestroy guards the default. A create derivation must
+// keep measuring the apply; if StepApply ever started destroying under the scratch
+// role it would report create permissions as delete permissions.
+func TestCreateNeverMeasuresTheDestroy(t *testing.T) {
+	truth := []string{"s3:CreateBucket", "s3:ListBucket"}
+	d, _, a := newFixture(truth, truth)
+	if _, err := d.Derive(context.Background(), truth); err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if a.measureDestroys != 0 {
+		t.Errorf("MeasureDestroy ran %d times during a create derivation", a.measureDestroys)
+	}
+	if a.applies == 0 {
+		t.Error("Apply never ran during a create derivation")
+	}
 }

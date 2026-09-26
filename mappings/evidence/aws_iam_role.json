@@ -141,6 +141,22 @@
         "iam:ListRolePolicies",
         "iam:TagRole"
       ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_iam_role",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 6,
+      "actions": [
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:ListRolePolicies"
+      ]
     }
   ]
 }

@@ -118,6 +118,28 @@ replace is a create plus a delete wearing an update's name. Check the provider
 docs for `ForceNew` before picking the attribute to vary. `aws_iam_policy`'s
 `name` and `description` are both in that category.
 
+## Delete paths need no fixture of their own
+
+A delete reuses the type's create fixture. The harness applies it with **operator**
+credentials, then destroys it under the **scratch role** — and that destroy is the
+measurement:
+
+```
+make derive TYPE=aws_iam_role OPERATION=delete FIXTURE=./derivefixtures/aws_iam_role
+```
+
+So every entry that already has a create fixture can have its delete path measured
+with no new files, and adding a create fixture buys two measurements rather than
+one.
+
+This was believed impossible until 2026-09-26. The harness had one `Destroy` doing
+two jobs — proving the action set sufficient, and guaranteeing the account ends
+clean — and because the second requires operator credentials, the first never ran
+under the scratch role. Splitting them cost one method.
+
+The operator cleanup still runs after every measured destroy, including the denied
+ones. Those are the attempts where a resource is guaranteed to be left standing.
+
 ## Traps already paid for
 
 - **A provider `default_tags` block silently tags a "minimal" fixture**, so the
