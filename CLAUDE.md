@@ -141,6 +141,11 @@ least-checked group.
      real apply, then remove one action and confirm it fails. Completeness is
      the dimension that produces false "allowed" results, so it cannot be
      established by inspection.
+  3. **Evidence filed.** `mappings/evidence/<type>.json`, written by `cmd/derive`
+     and checked by `TestVerifiedEntriesHaveEvidence`. Added 2026-09-26, because
+     the first two requirements were unenforceable: a claim could be typed with
+     nothing behind it, and deleting a proven action from a verified entry failed
+     nothing.
 - `read_actions` in the mapping schema holds the read-backs Terraform performs
   after every write. The engine unions them into create, update *and* delete —
   they are not per-operation. Omitting them is how `aws_s3_bucket` came to
@@ -242,17 +247,48 @@ build tag, `PREFLIGHT_DERIVE_ACCOUNT` checked against a **live**
 - `internal/derive`'s loop is pure and unit-tested with fakes; only the
   `awsderive`-tagged files touch AWS or Terraform.
 - Fixtures live in `derivefixtures/<type>/`. A derived set is only valid for the
-  provider version that produced it, so **the version is recorded in the entry's
-  `notes`** — that is the only place it is captured. `.gitignore` permits a
-  committed `.terraform.lock.hcl` per fixture and no fixture has one, because the
-  harness stages each fixture into a temp copy and Terraform writes the lock file
-  there. Pinning them properly would mean generating the lock outside the temp
-  copy; until then the notes are the record.
+  provider version that produced it, and **the authoritative record is
+  `provider_version` in the evidence file**, which `cmd/derive` reads from the
+  lock file Terraform actually wrote rather than taking anyone's word for it.
+  Entry `notes` mention versions too, as prose for a human; where the two
+  disagree the evidence file is right. (They did disagree: three update runs
+  recorded 6.63.0 by hand and had actually run on 6.66.0.)
+
+  No fixture commits a `.terraform.lock.hcl`, although `.gitignore` permits one,
+  because the harness stages each fixture into a temp copy and Terraform writes
+  the lock there. Reading the version back out of that temp copy is what makes
+  the evidence trustworthy without pinning.
 - The harness emits a **report**, never an edited YAML. `verified` is a claim a
   person makes, and the PR should say how completeness was established.
+- It DOES write `mappings/evidence/<type>.json`. That is not the same thing: the
+  YAML holds a claim, the evidence file holds a transcript. See below.
 - **No delete path can be derived**, structurally: teardown always runs with
   operator credentials, so a missing delete permission can never surface. Delete
   paths marked verified were established some other way.
+
+### `verified` is machine-checkable, and the check is asymmetric
+
+`mappings/evidence/<type>.json` records what each derivation run measured, and
+`TestVerifiedEntriesHaveEvidence` refuses a verification claim with no run behind
+it. `cmd/derive` writes these files; nobody writes one by hand.
+
+Before this existed there were **12 verification claims across 11 entries backed
+only by prose in a `notes` field**, and one of them had no notes at all. Two
+failures were invisible: typing `verified_operations: [create]` with nothing
+behind it, and — the dangerous one — **deleting a proven action from a verified
+entry**, which turns a proven claim into a false pass with no symptom.
+
+**The rule is `evidence ⊆ entry`, never equality, and this matters.** An entry
+legitimately holds more than any single run measured, because a run measures one
+fixture's shape. `iam:DeletePolicyVersion` is the case that proves it: minimality
+said droppable for a one-version update, and it is genuinely required once a
+policy hits AWS's five-version cap — which no fixture applying its change once
+can reach. Equality would force that action out and ship the false pass the
+measurement appeared to justify. `TestEvidenceAllowsTheEntryToHoldMore` guards
+the asymmetry against being "tidied up".
+
+Evidence files are read from disk, not embedded: they are a maintainer and CI
+artifact and have no business in the shipped binary.
 
 ### Deriving an update: the two-phase fixture
 

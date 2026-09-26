@@ -1,0 +1,19 @@
+{
+  "resource_type": "aws_iam_role_policy",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_iam_role_policy",
+      "derived_at": "2026-09-25",
+      "provider_version": "6.63.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "actions": [
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy"
+      ],
+      "backfilled": true,
+      "note": "The fixture does NOT create the role it attaches to; the role is a support resource created out of band, so exactly one resource type is in play."
+    }
+  ]
+}

@@ -124,9 +124,28 @@ established against a real apply, update was not.
    acceptable supporting evidence, but an apply that actually succeeds is the
    only thing that proves the list sufficient.
 3. Confirm which Terraform attribute supplies each ARN variable.
-4. Set `status: verified`, put the reference URL in `source`.
-5. **Say in the PR how you established completeness.** That is the claim being
-   made; "read the docs" does not support it.
+4. **File the evidence.** A verification claim needs a machine-checkable record
+   in `mappings/evidence/<type>.json`, and `TestVerifiedEntriesHaveEvidence`
+   fails CI without one. `cmd/derive` writes it for you — you do not write it by
+   hand. It records what the run measured: the action set, the fixture, the date,
+   the AWS provider version, and whether sufficiency and minimality were proven.
+
+   Two things this buys, both of which were missing until 2026-09-26:
+
+   - A verification claim cannot be *typed*. Before the evidence check there were
+     12 claims across 11 entries backed only by prose, and one of them had no
+     prose either.
+   - **Deleting a proven action from a verified entry now fails CI.** That edit
+     silently converts a proven claim into a false pass, and nothing caught it.
+
+   The rule is `evidence ⊆ entry`, not equality: an entry may legitimately hold
+   more than any single run measured, because a run measures one fixture's shape
+   and some actions are only required in shapes a fixture cannot reach.
+5. Set `status: verified`, or list the proven operations in
+   `verified_operations`, and put the reference URL in `source`.
+6. **Say in the PR how you established completeness.** That is the claim being
+   made; "read the docs" does not support it. The evidence file is the record;
+   the PR is where you argue it is enough.
 
 ## Schema
 

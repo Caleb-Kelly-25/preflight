@@ -1,0 +1,68 @@
+{
+  "resource_type": "aws_iam_policy",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_iam_policy",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 5,
+      "actions": [
+        "iam:CreatePolicy",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:TagPolicy"
+      ],
+      "note": "The entry claimed two of these four."
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_policy__update",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 11,
+      "actions": [
+        "iam:CreatePolicyVersion",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions"
+      ],
+      "note": "Policy DOCUMENT changed. First update path ever measured. iam:ListPolicyVersions was missing. iam:DeletePolicyVersion was measured surplus and is retained anyway: the five-version pruning cap is unreachable by a fixture that applies its change once."
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_policy__update_tags",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 11,
+      "actions": [
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:TagPolicy",
+        "iam:UntagPolicy"
+      ],
+      "note": "TAGS changed and one tag removed. Both tagging actions were missing, and the update path listed nothing for tags at all."
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_policy__update_default_tags",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 12,
+      "actions": [
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:TagPolicy"
+      ],
+      "note": "Provider default_tags changed, the resource's own tags untouched. Proved that gating a tagging action on `tags` alone is a false pass; 51 gates across 11 services were corrected to name tags_all too."
+    }
+  ]
+}

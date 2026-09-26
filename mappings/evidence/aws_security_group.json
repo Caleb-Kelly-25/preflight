@@ -1,0 +1,24 @@
+{
+  "resource_type": "aws_security_group",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_security_group",
+      "derived_at": "2026-09-25",
+      "provider_version": "6.63.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 11,
+      "actions": [
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateTags",
+        "ec2:DescribeSecurityGroups",
+        "ec2:RevokeSecurityGroupEgress"
+      ],
+      "backfilled": true,
+      "note": "The fixture sets tags, an ingress rule AND an egress rule on purpose. ec2:DescribeSecurityGroupRules and ec2:DescribeTags were both claimed and both proven unnecessary."
+    }
+  ]
+}

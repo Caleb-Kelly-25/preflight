@@ -1,0 +1,19 @@
+{
+  "resource_type": "aws_s3_bucket_public_access_block",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_s3_bucket_public_access_block",
+      "derived_at": "2026-09-25",
+      "provider_version": "6.63.0",
+      "sufficiency": "proven",
+      "minimality": "unproven",
+      "actions": [
+        "s3:GetBucketPublicAccessBlock",
+        "s3:PutBucketPublicAccessBlock"
+      ],
+      "backfilled": true,
+      "note": "s3:GetBucketPublicAccessBlock was missing before this run."
+    }
+  ]
+}

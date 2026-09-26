@@ -1,0 +1,19 @@
+{
+  "resource_type": "aws_s3_bucket_versioning",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_s3_bucket_versioning",
+      "derived_at": "2026-09-25",
+      "provider_version": "6.63.0",
+      "sufficiency": "proven",
+      "minimality": "partial",
+      "actions": [
+        "s3:GetBucketVersioning",
+        "s3:PutBucketVersioning"
+      ],
+      "backfilled": true,
+      "note": "s3:GetBucketVersioning was missing. Minimality partial: one removal produced a non-denial outcome, so that action is kept on weaker evidence than a clean AccessDenied."
+    }
+  ]
+}

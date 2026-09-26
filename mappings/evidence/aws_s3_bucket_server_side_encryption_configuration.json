@@ -1,0 +1,19 @@
+{
+  "resource_type": "aws_s3_bucket_server_side_encryption_configuration",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_s3_bucket_server_side_encryption_configuration",
+      "derived_at": "2026-09-25",
+      "provider_version": "6.63.0",
+      "sufficiency": "proven",
+      "minimality": "unproven",
+      "actions": [
+        "s3:GetEncryptionConfiguration",
+        "s3:PutEncryptionConfiguration"
+      ],
+      "backfilled": true,
+      "note": "s3:GetEncryptionConfiguration was missing. Note the IAM action is s3:PutEncryptionConfiguration, not s3:PutBucketEncryption, which does not exist."
+    }
+  ]
+}

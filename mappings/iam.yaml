@@ -181,16 +181,23 @@ resources:
       delete:
         - iam:DeletePolicy
     notes: >-
-      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
-      sufficiency proven, minimality proven, 7 attempts. A role holding exactly
-      iam:CreatePolicy, iam:TagPolicy, iam:GetPolicy and iam:GetPolicyVersion
-      creates a tagged managed policy, and removing any one of the four fails.
+      CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0, and
+      RE-DERIVED 2026-09-26 against 6.66.0 with an identical result: sufficiency
+      proven, minimality proven. A role holding exactly iam:CreatePolicy,
+      iam:TagPolicy, iam:GetPolicy and iam:GetPolicyVersion creates a tagged
+      managed policy, and removing any one of the four fails.
+
+      The re-derivation is worth more than a repeated result. Derived sets are
+      pinned to a provider version and are expected to drift; this is the first
+      evidence in the database of a set surviving a provider bump. The exact
+      numbers live in mappings/evidence/aws_iam_policy.json, which the harness
+      writes and CI checks.
 
       The previous entry claimed two of those and was wrong in the dangerous
       direction: it would have reported "allowed" for a deploy that cannot
       succeed.
 
-      UPDATE DERIVED 2026-09-26 against AWS provider 6.63.0, by the harness's
+      UPDATE DERIVED 2026-09-26 against AWS provider 6.66.0, by the harness's
       new two-phase mode: phase 1 establishes the resource with operator
       credentials, phase 2 applies the change under the scratch role, so what is
       measured is the update alone and not the create as well.

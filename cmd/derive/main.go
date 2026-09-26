@@ -48,6 +48,8 @@ func run(args []string, stdout, stderr *os.File) error {
 		region       = fs.String("region", "us-east-1", "AWS region")
 		budget       = fs.Duration("budget", 4*time.Minute, "per-apply budget; exceeding it counts as a stall")
 		maxAttempts  = fs.Int("max-attempts", 15, "cap on discovery attempts")
+		evidenceDir  = fs.String("evidence-dir", filepath.Join("mappings", "evidence"),
+			"where to record the run's transcript; empty to skip")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -183,6 +185,28 @@ func run(args []string, stdout, stderr *os.File) error {
 	// Report first: a run that aborted still established something, and the
 	// warnings explain why it stopped.
 	report(stdout, *resourceType, *operation, res)
+
+	// Record the transcript. This is NOT the same thing as editing the YAML,
+	// which the harness still refuses to do: promoting an entry to verified is a
+	// claim a person makes and justifies. Recording what a run measured is a
+	// transcript, and a hand-written transcript drifts — every evidence file that
+	// existed before this code did had to be transcribed from prose notes, and
+	// one entry claimed verification with no notes at all.
+	//
+	// Only a proven run is recorded. An inconclusive one measured nothing that
+	// could support a claim, and filing it as evidence would be the same mistake
+	// in a new place.
+	if *evidenceDir != "" && res.Sufficiency == derive.ConfidenceProven {
+		path, err := writeEvidence(*evidenceDir, *resourceType, *operation, *fixtureDir,
+			providerVersion(workDir), res)
+		if err != nil {
+			// A failure here loses the record, not the measurement, which the
+			// report above already printed. Worth a warning, not an abort.
+			fmt.Fprintf(stderr, "WARNING: could not record evidence: %v\n", err)
+		} else {
+			fmt.Fprintf(stdout, "\nrecorded in %s\n", path)
+		}
+	}
 	if derr != nil {
 		return derr
 	}

@@ -1,0 +1,39 @@
+{
+  "resource_type": "aws_iam_role",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "hand-run (pre-harness)",
+      "derived_at": "2026-09-01",
+      "provider_version": "5.100.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "actions": [
+        "iam:CreateRole",
+        "iam:TagRole",
+        "iam:GetRole",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies"
+      ],
+      "backfilled": true,
+      "note": "iam:TagRole is required although no TagRole API call is ever made: CreateRole accepts tags as a parameter and IAM authorises the action for them. It does not appear in CloudTrail, which is why observing API calls is not a sound way to derive an action list."
+    },
+    {
+      "operation": "delete",
+      "fixture": "hand-run (pre-harness)",
+      "derived_at": "2026-09-01",
+      "provider_version": "5.100.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "actions": [
+        "iam:DeleteRole",
+        "iam:ListInstanceProfilesForRole",
+        "iam:GetRole",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies"
+      ],
+      "backfilled": true,
+      "note": "iam:ListInstanceProfilesForRole is needed only on delete: the provider checks for attached instance profiles first."
+    }
+  ]
+}

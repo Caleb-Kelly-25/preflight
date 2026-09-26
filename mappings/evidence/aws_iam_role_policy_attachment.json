@@ -1,0 +1,19 @@
+{
+  "resource_type": "aws_iam_role_policy_attachment",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_iam_role_policy_attachment",
+      "derived_at": "2026-09-25",
+      "provider_version": "6.63.0",
+      "sufficiency": "proven",
+      "minimality": "unproven",
+      "actions": [
+        "iam:AttachRolePolicy",
+        "iam:ListAttachedRolePolicies"
+      ],
+      "backfilled": true,
+      "note": "iam:ListAttachedRolePolicies was missing before this run."
+    }
+  ]
+}

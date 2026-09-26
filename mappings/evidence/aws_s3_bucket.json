@@ -1,0 +1,85 @@
+{
+  "resource_type": "aws_s3_bucket",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "hand-run (pre-harness)",
+      "derived_at": "2026-09-01",
+      "provider_version": "5.100.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "actions": [
+        "s3:CreateBucket",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketAcl",
+        "s3:GetBucketCORS",
+        "s3:GetBucketLogging",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketTagging",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketWebsite",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration",
+        "s3:ListBucket",
+        "s3:PutBucketTagging"
+      ],
+      "backfilled": true,
+      "note": "17 actions, 14 of them reads. Established by hand before the harness existed; the run that found the entry wrong by 14."
+    },
+    {
+      "operation": "update",
+      "fixture": "hand-run (pre-harness)",
+      "derived_at": "2026-09-01",
+      "provider_version": "5.100.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "actions": [
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketAcl",
+        "s3:GetBucketCORS",
+        "s3:GetBucketLogging",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketTagging",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketWebsite",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration",
+        "s3:ListBucket",
+        "s3:PutBucketTagging"
+      ],
+      "backfilled": true
+    },
+    {
+      "operation": "delete",
+      "fixture": "hand-run (pre-harness)",
+      "derived_at": "2026-09-01",
+      "provider_version": "5.100.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "actions": [
+        "s3:DeleteBucket",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketAcl",
+        "s3:GetBucketCORS",
+        "s3:GetBucketLogging",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketTagging",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketWebsite",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration",
+        "s3:ListBucket"
+      ],
+      "backfilled": true
+    }
+  ]
+}

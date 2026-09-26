@@ -362,6 +362,53 @@ pass**, so tie it to evidence. The tagging gates came from measurement:
 ever made, and `s3:PutBucketTagging` is a genuine second call because
 `CreateBucket` does not accept tags.
 
+## `status` and `verified_operations` need evidence
+
+Both are verification claims, and a claim needs a record. `mappings/evidence/<type>.json`
+holds it, `cmd/derive` writes it, and `TestVerifiedEntriesHaveEvidence` fails CI
+when a claim has no run behind it.
+
+```json
+{
+  "resource_type": "aws_iam_policy",
+  "runs": [
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_policy__update",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 8,
+      "actions": ["iam:CreatePolicyVersion", "iam:ListPolicyVersions",
+                  "iam:GetPolicy", "iam:GetPolicyVersion"],
+      "note": "Policy DOCUMENT changed."
+    }
+  ]
+}
+```
+
+One operation can hold several runs, and for an update it usually must: each
+branch of an `attribute_changed` gate is its own measurement. The merge key is
+`(operation, fixture)`, so re-running a fixture supersedes its old record rather
+than accumulating two.
+
+`provider_version` is read from the lock file Terraform wrote, not supplied by
+hand. A derived set is only valid for the provider that produced it.
+
+### The check is `evidence ⊆ entry`, not equality
+
+Every action a run measured must appear in the entry. The entry may hold **more**.
+
+Both halves are load-bearing. The first catches the dangerous edit — deleting a
+proven action, which converts a proven claim into a false pass with no visible
+symptom. The second keeps the database honest in the other direction: a run
+measures one fixture's shape, and some actions are only required in shapes no
+fixture can reach. `iam:DeletePolicyVersion` is the case — minimality proved it
+droppable for a one-version update, and it is required once a policy hits AWS's
+five-version cap. Demanding equality would force it out of the entry and ship
+the false pass the measurement appeared to justify.
+
 ## `resource_policy_capable`
 
 A **list of operations** during which the target resource can be denied by a

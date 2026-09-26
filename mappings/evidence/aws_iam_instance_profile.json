@@ -1,0 +1,22 @@
+{
+  "resource_type": "aws_iam_instance_profile",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_iam_instance_profile",
+      "derived_at": "2026-09-25",
+      "provider_version": "6.63.0",
+      "sufficiency": "proven",
+      "minimality": "unproven",
+      "actions": [
+        "iam:AddRoleToInstanceProfile",
+        "iam:CreateInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:GetRole",
+        "iam:PassRole"
+      ],
+      "backfilled": true,
+      "note": "iam:PassRole and iam:GetRole are authorised against the ROLE, not the profile, so both sit under `references` and both are part of this measured set. Granting the instance-profile actions alone is not enough, which is what the entry claimed before."
+    }
+  ]
+}

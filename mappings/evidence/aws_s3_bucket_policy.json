@@ -1,0 +1,19 @@
+{
+  "resource_type": "aws_s3_bucket_policy",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_s3_bucket_policy",
+      "derived_at": "2026-09-25",
+      "provider_version": "6.63.0",
+      "sufficiency": "proven",
+      "minimality": "unproven",
+      "actions": [
+        "s3:GetBucketPolicy",
+        "s3:PutBucketPolicy"
+      ],
+      "backfilled": true,
+      "note": "s3:GetBucketPolicy was missing before this run."
+    }
+  ]
+}
