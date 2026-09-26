@@ -89,3 +89,52 @@ func TestNamedDenialIsNeverOpaque(t *testing.T) {
 		t.Fatalf("actions = %v, want one", got)
 	}
 }
+
+// TestDenialActionPrefixIsCanonicalised covers a real corruption found on
+// 2026-09-26 while deriving aws_sns_topic. SNS denies with an UPPERCASE service
+// prefix — "SNS:SetTopicAttributes" — and the parser took it verbatim, so the
+// measured set was written into mappings/evidence/aws_sns_topic.json in a casing
+// that can never match what a correct entry lists.
+//
+// IAM authorises either spelling, so nothing failed at AWS. The damage was
+// downstream: the evidence check compares action strings exactly, and
+// TestShippedDatabase requires the lowercase declared prefix, so the evidence and
+// the entry would have disagreed permanently for a reason unrelated to
+// permissions.
+func TestDenialActionPrefixIsCanonicalised(t *testing.T) {
+	for name, tc := range map[string]struct{ text, want string }{
+		"SNS uppercases its prefix": {
+			text: "AccessDenied: User: arn:aws:iam::1:user/x is not authorized to perform: SNS:SetTopicAttributes on resource: arn:aws:sns:us-east-1:1:t",
+			want: "sns:SetTopicAttributes",
+		},
+		"a lowercase prefix is left alone": {
+			text: "is not authorized to perform: iam:PassRole on resource: arn:aws:iam::1:role/r",
+			want: "iam:PassRole",
+		},
+		"mixed case in the prefix only": {
+			text: "is not authorized to perform: DynamoDB:CreateTable on resource: arn:aws:dynamodb:us-east-1:1:table/t",
+			want: "dynamodb:CreateTable",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, opaque := derive.ParseDenial(tc.text)
+			if opaque {
+				t.Fatalf("reported opaque; want the action %q", tc.want)
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("got %v, want [%s]", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDenialActionNameCaseIsPreserved pins the other half: only the prefix is
+// lowercased. "sns:settopicattributes" authorises identically but is not the
+// spelling a reviewer would recognise in a mapping, and the database is meant to
+// be checkable by eye.
+func TestDenialActionNameCaseIsPreserved(t *testing.T) {
+	got, _ := derive.ParseDenial("is not authorized to perform: SNS:SetTopicAttributes on resource: x")
+	if len(got) != 1 || got[0] != "sns:SetTopicAttributes" {
+		t.Errorf("got %v, want [sns:SetTopicAttributes]", got)
+	}
+}

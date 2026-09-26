@@ -21,6 +21,30 @@ import (
 // parser tries the named form first and only reports opacity when that fails.
 var notAuthorized = regexp.MustCompile(`not authorized to perform:?\s+([a-zA-Z0-9-]+:[A-Za-z0-9]+)`)
 
+// canonicalAction lowercases the SERVICE PREFIX and leaves the action name alone.
+//
+// Services do not agree on the casing they hand back. SNS denies with
+// "SNS:SetTopicAttributes" while IAM and S3 use a lowercase prefix, and IAM
+// treats action names case-insensitively so all of them authorise identically.
+// The mapping database does not: `TestShippedDatabase` requires every action to
+// use its resource's declared service prefix, which is lowercase, and the
+// evidence check compares action strings EXACTLY. An uncanonicalised name
+// therefore lands in mappings/evidence/<type>.json as "SNS:SetTopicAttributes",
+// which can never match the "sns:SetTopicAttributes" a correct entry lists — so
+// the evidence would contradict the entry forever, for a reason that has nothing
+// to do with permissions.
+//
+// Only the prefix is touched. Lowercasing the whole string would produce
+// "sns:settopicattributes", which authorises fine but is not the canonical
+// spelling anyone reviewing a mapping would recognise.
+func canonicalAction(a string) string {
+	service, action, found := strings.Cut(a, ":")
+	if !found {
+		return a
+	}
+	return strings.ToLower(service) + ":" + action
+}
+
 // explicitDeny matches a denial caused by a policy that names the action, which
 // reads differently but carries the same information.
 var explicitDeny = regexp.MustCompile(`([a-zA-Z0-9-]+:[A-Za-z0-9]+)\s+on resource[^,]*with an explicit deny`)
@@ -39,7 +63,7 @@ func ParseDenial(text string) (actions []string, opaque bool) {
 	seen := map[string]bool{}
 	add := func(matches [][]string) {
 		for _, m := range matches {
-			a := strings.TrimSpace(m[1])
+			a := canonicalAction(strings.TrimSpace(m[1]))
 			if a != "" && !seen[a] {
 				seen[a] = true
 				actions = append(actions, a)

@@ -362,6 +362,20 @@ undo them without understanding what they cost.
   action. Sweep and re-run to finish.
 - **A failed teardown stops the run too**, for the same reason, and exits
   non-zero.
+- **Denied action names are canonicalised to a lowercase service prefix.**
+  Services disagree on casing: SNS denies with `SNS:SetTopicAttributes` while IAM
+  and S3 use lowercase. IAM authorises either, so nothing fails at AWS — the
+  damage is downstream, in `mappings/evidence/<type>.json`, where the evidence
+  check compares action strings EXACTLY and `TestShippedDatabase` requires the
+  lowercase declared prefix. An uncanonicalised name makes the evidence and the
+  entry disagree permanently for a reason unrelated to permissions. Only the
+  prefix is lowered; `sns:settopicattributes` would authorise but is not a
+  spelling a reviewer would recognise.
+- **`iam:PassRole` showing as SURPLUS is normal, not a signal to remove it.**
+  `seedActions` includes every `references` action unconditionally, because the
+  harness has no plan to evaluate a `when` gate against. A fixture that sets none
+  of the role-handing attributes will always report the reference surplus. Only
+  a MISSING reference action means anything.
 - **Fixtures take the account as `TF_VAR_account_id`**, never hardcoded. An
   account number in a tracked file is information disclosure in a repository
   meant to go public, and a hardcoded one makes the fixture unusable by any

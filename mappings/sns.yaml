@@ -80,6 +80,8 @@ resources:
   - type: aws_sns_topic
     service: sns
     status: draft
+    # Create derived 2026-09-26, both fixture variants. Update and delete are not.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html
     # `name` is known at plan time when set explicitly, so a create resolves to a
     # real ARN rather than degrading to "*". Like SQS and unlike most services,
@@ -117,11 +119,22 @@ resources:
     operations:
       create:
         - sns:CreateTopic
-        # Tag-on-create: CreateTopic accepts a Tags parameter, so no separate API
-        # call is expected — but the tagging action is still authorized. Same
-        # shape as iam:TagRole on CreateRole and ec2:CreateTags on CreateVpc,
-        # both of which WERE measured to be required with no separate call ever
-        # appearing. REASONED here from that precedent.
+        # MISSING UNTIL MEASURED 2026-09-26, and required for EVERY topic — the
+        # minimal fixture (no tags, no display name, nothing optional) needs it
+        # too. The provider follows CreateTopic with SetTopicAttributes to write
+        # the topic's attributes, whether or not the configuration sets any.
+        #
+        # That made this a false pass on one of the most commonly used resource
+        # types in the database: the entry reported a create as needing only
+        # CreateTopic and the reads, and no deploy could have succeeded with that.
+        # Unconditional, because it was measured required with nothing set.
+        - sns:SetTopicAttributes
+        # GATE MEASURED both directions 2026-09-26: the maximal fixture derives
+        # sns:TagResource and the minimal one reports it surplus. Previously
+        # reasoned from the iam:TagRole / ec2:CreateTags precedent — CreateTopic
+        # accepts a Tags parameter, so no separate API call appears, and the
+        # tagging action is authorized anyway. The precedent was right, and it is
+        # now measurement rather than analogy.
         - action: sns:TagResource
           when: { attribute_set: [tags, tags_all] }
       update:

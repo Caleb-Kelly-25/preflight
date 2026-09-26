@@ -1,0 +1,36 @@
+{
+  "resource_type": "aws_sns_topic",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_sns_topic",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 8,
+      "actions": [
+        "sns:CreateTopic",
+        "sns:GetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:SetTopicAttributes",
+        "sns:TagResource"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_sns_topic__minimal",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 9,
+      "actions": [
+        "sns:CreateTopic",
+        "sns:GetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:SetTopicAttributes"
+      ]
+    }
+  ]
+}
