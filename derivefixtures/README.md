@@ -30,7 +30,12 @@ ten for ten.
 |---|---|
 | `aws_vpc/` | The maximal create fixture: tags set, optional attributes set. |
 | `aws_vpc__minimal/` | The same type with nothing optional set. |
-| `aws_iam_policy__update/` | A two-phase fixture measuring the update path. |
+| `aws_iam_policy__update/` | A two-phase fixture measuring an update path. |
+| `aws_iam_role__update_tags/` | An update fixture naming the attribute it varies. |
+
+Once a type has more than one update fixture, name each after the attribute it
+varies — `__update_description`, `__update_tags`. A bare `__update` is fine only
+while there is one.
 
 The harness takes a directory, so a variant is just another directory. No
 registry, no index — the name carries the meaning.
@@ -141,8 +146,17 @@ docs for `ForceNew` before picking the attribute to vary. `aws_iam_policy`'s
 1. Write the directory, following the conventions above.
 2. Run `go run ./cmd/arncheck` if you also touched a mapping — it verifies every
    `arn_format` against AWS's machine-readable service reference.
-3. Run the harness and read the report. It emits evidence; it deliberately does
-   **not** edit the YAML. Promoting an entry to `verified` is a *claim*, and a
-   person makes it in the pull request.
-4. Record the AWS provider version in the entry's notes. Derived sets are pinned
-   to one provider version and they will drift.
+3. Run the harness and read the report. It deliberately does **not** edit the
+   YAML: promoting an entry to `verified` is a *claim*, and a person makes it in
+   the pull request.
+4. Commit the evidence file the run wrote to `mappings/evidence/<type>.json`.
+   That part is not a claim, it is a transcript — the measured action set, the
+   fixture, the date, and the AWS provider version read out of the lock file
+   Terraform actually wrote. `TestVerifiedEntriesHaveEvidence` checks every
+   verification claim against it, and deleting a proven action from a verified
+   entry fails CI because of it.
+
+   Do not hand-write or hand-edit these. The eleven files that were backfilled
+   from prose notes are marked `backfilled: true`, and the first hand-written
+   provenance in them was already wrong: three runs recorded as provider 6.63.0
+   had really run on 6.66.0. If provenance can be computed, do not type it.

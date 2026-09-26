@@ -34,6 +34,113 @@
       ],
       "backfilled": true,
       "note": "iam:ListInstanceProfilesForRole is needed only on delete: the provider checks for attached instance profiles first."
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_role__update_description",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 13,
+      "actions": [
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:UpdateRoleDescription"
+      ]
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_role__update_max_session",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 13,
+      "actions": [
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:UpdateRole"
+      ]
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_role__update_assume_policy",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 13,
+      "actions": [
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:UpdateAssumeRolePolicy"
+      ]
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_role__update_tags",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 12,
+      "actions": [
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:TagRole",
+        "iam:UntagRole"
+      ]
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_role__update_boundary",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 16,
+      "actions": [
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:PutRolePermissionsBoundary"
+      ]
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_iam_role__update_boundary_removed",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 16,
+      "actions": [
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_iam_role",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 6,
+      "actions": [
+        "iam:CreateRole",
+        "iam:GetRole",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:TagRole"
+      ]
     }
   ]
 }

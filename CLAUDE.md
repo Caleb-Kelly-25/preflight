@@ -218,9 +218,19 @@ location** — with `executionSuccessful: false`, a `toolExecutionNotifications`
 entry and a stderr warning, because a SARIF run with no results reads to GitHub
 as a clean bill of health. See the header comment on `report.WriteSARIF`.
 
-**Not yet implemented:**
+**Shipped, with one honest caveat.** v0.1.0 is released (GoReleaser, six
+archives, `checksums.txt`), `action.yml` is a composite Action that downloads the
+pinned binary and verifies its checksum, and `.github/workflows/release.yml`
+builds on tag. An earlier version of this section claimed both were "not yet
+implemented", which was wrong and is the kind of staleness to check rather than
+trust.
 
-- the GitHub Action wrapper, and released binaries
+**The caveat: the Action has never run on a real runner.** Its download,
+checksum and extraction paths were exercised by hand against the real v0.1.0
+artifacts, but no workflow has `uses:`-ed it. That needs AWS credentials in a
+repository's secrets, which is an owner decision, not something to automate.
+Until it happens, the SARIF round trip — annotations landing on the right line
+in a real pull request — is also unconfirmed.
 
 **The binding constraint is mapping coverage and verification, not code.** Most
 entries are `draft`, and a draft operation caps its findings at `Likely` no

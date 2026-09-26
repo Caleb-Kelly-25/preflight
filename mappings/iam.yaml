@@ -18,16 +18,21 @@
 # aws_iam_role missing 5, aws_iam_policy 2, aws_iam_instance_profile 2,
 # aws_iam_role_policy 1, aws_iam_role_policy_attachment 1.
 #
-# aws_iam_policy's UPDATE path was derived 2026-09-26 and was wrong in the same
-# direction, three times over — see that entry's notes. Every other update path
-# here is still reasoning.
+# UPDATE paths are now derived for two entries, and both were wrong in the same
+# direction. aws_iam_policy took three fixtures; aws_iam_role took six, one per
+# updatable attribute, and closed two false passes — it listed nothing at all for
+# a permissions-boundary change. Every other update path here is still reasoning.
+#
+# aws_iam_role is `verified` as of 2026-09-26, the second fully-verified entry in
+# the database and the first whose update path is measured rather than reasoned.
 #
 # Known gaps, listed rather than guessed at:
 #   - Deleting a role that still has inline policies or attachments requires
 #     removing them first; whether the provider does that itself is unresolved.
-#   - Every update path except aws_iam_policy's is unverified. They are the
-#     hardest to derive, because the required actions depend on which attributes
-#     changed, so each branch of each gate needs its own two-phase fixture.
+#   - Every update path except aws_iam_policy's and aws_iam_role's is unverified.
+#     They are the hardest to derive, because the required actions depend on
+#     which attributes changed, so each branch of each gate needs its own
+#     two-phase fixture — six of them for aws_iam_role alone.
 #   - No delete path can be derived by the harness at all: teardown always runs
 #     with operator credentials, so a missing delete permission can never
 #     surface. Delete paths marked verified were established by other means.
@@ -37,10 +42,12 @@
 resources:
   - type: aws_iam_role
     service: iam
-    status: draft
-    # Create and delete were established empirically against provider v5.100.0
-    # on 2026-09-01; update was not. See notes.
-    verified_operations: [create, delete]
+    # VERIFIED 2026-09-26: every operation now has a measurement behind it, and
+    # the evidence is in mappings/evidence/aws_iam_role.json rather than in this
+    # prose. Read the notes for what "verified" does and does not cover here —
+    # in particular, delete rests on a pre-harness hand run the harness
+    # structurally cannot reproduce.
+    status: verified
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
     arn_attributes:
@@ -70,17 +77,38 @@ resources:
         # to four actions and reports this one surplus.
         - action: iam:TagRole
           when: { attribute_set: [tags, tags_all] }
+      # UPDATE DERIVED 2026-09-26 against provider 6.66.0 by six two-phase
+      # fixtures, one per updatable attribute. Every gate below is measurement,
+      # not reasoning, and two of them closed false passes.
       update:
         - action: iam:UpdateRoleDescription
           when: { attribute_changed: [description] }
-        # The UpdateRole API covers description AND max_session_duration.
-        # v5.100.0 used UpdateRoleDescription for a description change, but
-        # gating on both attributes stays correct if the provider ever switches
-        # — at the cost of asking for both on a description change.
+        # MEASURED, and narrowed. IAM's UpdateRole API covers description AND
+        # max_session_duration, so this was previously gated on both "in case the
+        # provider ever switches". Two fixtures settled it: a description change
+        # needs UpdateRoleDescription and reports UpdateRole surplus, and a
+        # max_session_duration change does exactly the reverse.
+        #
+        # Narrowing a gate is the edit that can introduce a false pass, so it is
+        # tied to the provider version in the evidence file. A provider bump
+        # should re-derive rather than assume.
         - action: iam:UpdateRole
-          when: { attribute_changed: [description, max_session_duration] }
+          when: { attribute_changed: [max_session_duration] }
         - action: iam:UpdateAssumeRolePolicy
           when: { attribute_changed: [assume_role_policy] }
+        # BOTH WERE MISSING, and both were false passes: this entry listed
+        # nothing at all for a permissions-boundary change, so a plan attaching a
+        # boundary to a role — or taking one off — was reported as needing no
+        # permission for it. Its own notes admitted the gap and it sat there.
+        #
+        # Measured in both directions separately, because IAM has separate
+        # actions for them and reasoning by symmetry is how the other half of a
+        # pair gets shipped wrong. Each over-reports on the opposite direction,
+        # which is the safe side.
+        - action: iam:PutRolePermissionsBoundary
+          when: { attribute_changed: [permissions_boundary] }
+        - action: iam:DeleteRolePermissionsBoundary
+          when: { attribute_changed: [permissions_boundary] }
         - action: iam:TagRole
           when: { attribute_changed: [tags, tags_all] }
         - action: iam:UntagRole
@@ -104,17 +132,50 @@ resources:
       iam:ListInstanceProfilesForRole is needed only on delete — the provider
       checks for attached instance profiles before removing a role.
 
-      STILL DRAFT, and the reason is the update path. Changing description,
-      trust policy and a tag value needs iam:UpdateRoleDescription (which the
-      previous entry omitted), iam:UpdateAssumeRolePolicy and iam:TagRole;
-      measured minimal for that shape. iam:UpdateRole and iam:UntagRole were
-      measured NOT needed for it and are retained because other shapes — a
-      max_session_duration change, a tag removal — plainly do need them, which
-      is reasoning rather than measurement. Attribute shapes the fixture never
-      exercised may need actions nobody has listed; a permissions boundary would
-      need iam:PutRolePermissionsBoundary, which is absent here. Completeness
-      for update is therefore unproven, and one status field cannot say that
-      create is verified while update is not.
+      UPDATE DERIVED 2026-09-26 against provider 6.66.0, which is what promoted
+      this entry from draft. Six two-phase fixtures, one per updatable attribute,
+      because an update path depends on which attribute changed and a branch
+      nobody measured is a false pass:
+
+        description          -> iam:UpdateRoleDescription
+        max_session_duration -> iam:UpdateRole
+        assume_role_policy   -> iam:UpdateAssumeRolePolicy
+        permissions_boundary -> iam:PutRolePermissionsBoundary   (added)
+        permissions_boundary -> iam:DeleteRolePermissionsBoundary (removed)
+        tags                 -> iam:TagRole and iam:UntagRole
+
+      plus the three read_actions on every one. Each was sufficiency- and
+      minimality-proven.
+
+      TWO FALSE PASSES WERE CLOSED. Both permissions-boundary actions were
+      absent, so attaching a boundary to a role — or removing one — was reported
+      as needing no permission at all. The previous version of this note admitted
+      the gap and left it open.
+
+      One gate was NARROWED on measurement. iam:UpdateRole was gated on
+      description as well as max_session_duration, defensively, in case the
+      provider switched which API it used. It does not: a description change
+      needs UpdateRoleDescription and reports UpdateRole surplus, and a
+      max_session_duration change does the reverse. Narrowing is the edit that
+      can introduce a false pass, so it is pinned to the provider version in the
+      evidence file and a bump should re-derive rather than assume.
+
+      Update is complete because those are the only attributes AWS can change in
+      place. name, name_prefix and path all force replacement, which Terraform
+      plans as delete plus create — both of which are mapped.
+
+      CREATE RE-DERIVED 2026-09-26 at 6.66.0 from the new maximal fixture, with
+      an identical result to the 5.100.0 hand run. The maximal fixture sets a
+      permissions boundary, which answered a second open question: creating a
+      role WITH a boundary needs no action beyond iam:CreateRole, because
+      CreateRole takes the boundary as a parameter and IAM authorises it there.
+
+      THE HONEST CAVEAT ON `verified`. Delete rests on the 2026-09-01 hand run at
+      provider 5.100.0 and has not been reproduced since, because the harness
+      structurally cannot derive a delete path at all — teardown always runs with
+      operator credentials, so a missing delete permission can never surface. It
+      is the weakest of the three claims and the one to re-establish by hand if
+      this entry is ever doubted.
 
       Separately: any OTHER resource that hands this role to a service (an ECS
       task definition, a Lambda function) needs iam:PassRole on it. That is a
