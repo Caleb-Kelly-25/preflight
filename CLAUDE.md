@@ -225,12 +225,32 @@ builds on tag. An earlier version of this section claimed both were "not yet
 implemented", which was wrong and is the kind of staleness to check rather than
 trust.
 
-**The caveat: the Action has never run on a real runner.** Its download,
-checksum and extraction paths were exercised by hand against the real v0.1.0
-artifacts, but no workflow has `uses:`-ed it. That needs AWS credentials in a
-repository's secrets, which is an owner decision, not something to automate.
-Until it happens, the SARIF round trip — annotations landing on the right line
-in a real pull request — is also unconfirmed.
+**The caveat, and it is sharper than it looks: the Action cannot work at all
+while this repository is private.** Release assets of a private repository are
+not downloadable without credentials, so the action's `curl` gets a flat 404.
+Measured 2026-09-26 by actually running it on ubuntu, macOS and Windows runners —
+all three failed identically, before reaching the binary.
+
+That is **not** a bug in `action.yml`. The URL it builds is correct and the
+archive name it asks for is exactly the name published; the `release-assets` CI
+job proves the second half on every push. It is a fact about where the artifacts
+live, and it resolves itself when the repository goes public, with no code change.
+
+Two consequences worth keeping straight:
+
+- The `action-smoke` CI job is **gated on `github.event.repository.private ==
+  false`** and enables itself when that changes. It is dormant, not broken — a
+  job that fails for a reason nobody intends to fix is worse than no job.
+- The SARIF round trip (annotations landing on the right line in a real pull
+  request) is still unconfirmed, and additionally needs AWS credentials in
+  repository secrets. That one is an owner decision, not something to automate.
+
+`release-assets` carries the coverage in the meantime: it reconstructs every
+archive name the action can ask for and asserts each is published AND listed in
+`checksums.txt`. The action builds that name from `RUNNER_OS`/`RUNNER_ARCH` while
+goreleaser decides what exists; nothing else connects the two, so dropping a
+platform from the build matrix would break the action silently and only for the
+users on it.
 
 **The binding constraint is mapping coverage and verification, not code.** Most
 entries are `draft`, and a draft operation caps its findings at `Likely` no

@@ -202,10 +202,19 @@ jobs:
   # nothing had ever `uses:`-ed it, so the one completely unexercised surface in
   # the product was the part that fetches and executes a binary.
   #
-  # This job closes most of that gap WITHOUT secrets. With no AWS credentials
-  # configured, preflight cannot answer and exits 2 — which is itself a
-  # documented contract worth testing. Getting to that exit code proves
-  # everything up to the AWS call actually works on a real runner:
+  # DORMANT WHILE THE REPOSITORY IS PRIVATE, and it enables itself the moment that
+  # changes. Release assets of a private repository are not downloadable without
+  # credentials, so the action's `curl` gets a flat 404 — measured 2026-09-26, on
+  # all three runner families. That is not a bug in action.yml: the URL it builds
+  # is correct, and `release-assets` below proves the name it asks for is exactly
+  # the name published. It is a fact about where the artifacts live, and it means
+  # the action genuinely cannot be exercised end to end until the repository is
+  # public. A job that fails for a reason nobody intends to fix is worse than no
+  # job, so this one waits rather than going red.
+  #
+  # When it does run, with no AWS credentials configured preflight cannot answer
+  # and exits 2 — itself a documented contract worth testing. Reaching that exit
+  # code proves everything up to the AWS call works on a real runner:
   #
   #   resolve  RUNNER_OS / RUNNER_ARCH mapped to a real archive name
   #   install  download, checksum verification, extraction, `preflight version`
@@ -215,8 +224,80 @@ jobs:
   # What it still does NOT cover: a run with real credentials, and therefore the
   # SARIF round trip onto a pull request. Both need secrets and an owner
   # decision.
+  # What the action-smoke job below cannot check while this repository is
+  # private: that every archive name the action is capable of asking for is
+  # actually published, and is covered by checksums.txt.
+  #
+  # This is the failure mode worth guarding. The action reconstructs the archive
+  # name from RUNNER_OS and RUNNER_ARCH; goreleaser decides what gets built. The
+  # two agree today and nothing connected them, so dropping a platform from the
+  # build matrix — or changing `name_template` — would break the action for that
+  # platform silently, and only for the users on it.
+  #
+  # It reads the release through the API with the job's own token, so it works on
+  # a private repository, which is exactly why it carries the coverage while the
+  # end-to-end job waits.
+  release-assets:
+    name: release assets match what the action asks for
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every (os, arch) the action can resolve is published and checksummed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          version="$(tr -d '[:space:]' < VERSION)"
+          tag="v${version#v}"
+          echo "checking release $tag"
+
+          # If no release exists yet for the version in VERSION, there is nothing
+          # to check and nothing wrong — the release workflow runs on the tag.
+          if ! gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+            echo "no release $tag yet; nothing to check"
+            exit 0
+          fi
+
+          assets="$(gh release view "$tag" --repo "$REPO" --json assets -q '.assets[].name')"
+          echo "published:"; echo "$assets" | sed 's/^/  /'
+
+          gh release download "$tag" --repo "$REPO" --pattern checksums.txt --output checksums.txt --clobber
+
+          # The same mapping action.yml performs, kept deliberately as a literal
+          # list: generating it from the same source the action uses would make
+          # the two agree by construction and check nothing.
+          missing=0
+          for pair in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64" "windows arm64"; do
+            set -- $pair
+            archive="preflight_${version#v}_$1_$2.tar.gz"
+
+            if ! echo "$assets" | grep -qxF "$archive"; then
+              echo "::error title=release-assets::$archive is not published in $tag, but the action will ask for it on $1/$2"
+              missing=1
+              continue
+            fi
+            # The action refuses to run a binary that is not in checksums.txt, so
+            # a published-but-unchecksummed archive is a hard failure there too.
+            if ! awk -v f="$archive" '$2 == f || $2 == "*" f { found=1 } END { exit !found }' checksums.txt; then
+              echo "::error title=release-assets::$archive is published but absent from checksums.txt; the action would refuse to run it"
+              missing=1
+              continue
+            fi
+            echo "ok: $archive (published, checksummed)"
+          done
+          exit $missing
+
   action-smoke:
     name: action install (${{ matrix.os }})
+    # github.event.repository is absent on some event types, so this is written to
+    # require an explicit `false` rather than to trust a missing value.
+    if: ${{ github.event.repository.private == false }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
