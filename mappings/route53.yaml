@@ -39,6 +39,9 @@ resources:
   - type: aws_route53_zone
     service: route53
     status: draft
+    # Create derived 2026-09-26 (see notes and mappings/evidence/). Update and
+    # delete are not, and delete structurally cannot be by the harness.
+    verified_operations: [create]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonroute53.html
     # Empty region and account are correct, not an oversight. See the header.
     arn_format: "arn:${Partition}:route53:::hostedzone/${Id}"
