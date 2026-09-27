@@ -63,6 +63,21 @@
         "iam:TagPolicy"
       ],
       "note": "Provider default_tags changed, the resource's own tags untouched. Proved that gating a tagging action on `tags` alone is a false pass; 51 gates across 11 services were corrected to name tags_all too."
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_iam_policy",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 6,
+      "actions": [
+        "iam:DeletePolicy",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions"
+      ]
     }
   ]
 }

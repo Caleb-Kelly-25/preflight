@@ -16,6 +16,23 @@
         "route53:GetHostedZone",
         "route53:ListTagsForResource"
       ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_route53_zone",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 9,
+      "actions": [
+        "route53:DeleteHostedZone",
+        "route53:GetChange",
+        "route53:GetDNSSEC",
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets",
+        "route53:ListTagsForResource"
+      ]
     }
   ]
 }

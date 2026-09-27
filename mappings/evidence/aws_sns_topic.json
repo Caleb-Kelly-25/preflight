@@ -31,6 +31,20 @@
         "sns:ListTagsForResource",
         "sns:SetTopicAttributes"
       ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_sns_topic",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 4,
+      "actions": [
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:ListTagsForResource"
+      ]
     }
   ]
 }

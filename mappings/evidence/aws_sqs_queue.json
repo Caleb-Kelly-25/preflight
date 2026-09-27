@@ -29,6 +29,20 @@
         "sqs:GetQueueAttributes",
         "sqs:ListQueueTags"
       ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_sqs_queue",
+      "derived_at": "2026-09-26",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 4,
+      "actions": [
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:ListQueueTags"
+      ]
     }
   ]
 }

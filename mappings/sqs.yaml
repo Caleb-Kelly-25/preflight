@@ -62,8 +62,9 @@ resources:
   - type: aws_sqs_queue
     service: sqs
     status: draft
-    # Create derived 2026-09-26, both fixture variants. Update and delete are not.
-    verified_operations: [create]
+    # Create and delete derived 2026-09-26; delete needed no new fixture, it
+    # reuses the create one. Update is not derived.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsqs.html
     # `name` is known at plan time when set explicitly, so a create resolves to a
     # real ARN rather than degrading to "*". Note the SQS ARN ends in the bare
@@ -144,9 +145,13 @@ resources:
       faster than that. That incidentally exercised `arn_prefix_attributes`
       against a real apply for the first time.
 
-      UPDATE AND DELETE REMAIN UNMEASURED. Assume those lists are SHORT rather
-      than long: the one entry in this database checked by hand needed 17 actions
-      where 3 were claimed.
+      DELETE DERIVED 2026-09-26, 4 attempts, and already correct: sqs:DeleteQueue
+      plus the two reads, zero missing. It needed no new fixture — a delete reuses
+      the create fixture.
+
+      UPDATE REMAINS UNMEASURED. Assume that list is SHORT rather than long: the
+      one entry in this database checked by hand needed 17 actions where 3 were
+      claimed.
 
       THE FIRST THING TO CHECK: sqs:GetQueueUrl is deliberately absent from
       read_actions and is the most likely missing action in this file. The name

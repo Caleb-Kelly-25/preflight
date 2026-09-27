@@ -194,8 +194,8 @@ resources:
   - type: aws_iam_policy
     service: iam
     status: draft
-    # Create derived 2026-09-25, update 2026-09-26. Delete was not.
-    verified_operations: [create, update]
+    # All three operations derived: create 2026-09-25, update and delete 2026-09-26.
+    verified_operations: [create, update, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:policy/${PolicyName}"
     arn_attributes:
@@ -251,6 +251,14 @@ resources:
           when: { attribute_changed: [tags, tags_all] }
       delete:
         - iam:DeletePolicy
+        # MISSING UNTIL MEASURED 2026-09-26. The provider lists a policy's versions
+        # before deleting it — AWS refuses to delete a policy that still has
+        # non-default versions, so they have to be found first.
+        #
+        # It cannot go in read_actions: the create path was measured and does NOT
+        # need it, so unioning it into every operation would over-report on every
+        # policy creation. Per-operation is the honest placement.
+        - iam:ListPolicyVersions
     notes: >-
       CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0, and
       RE-DERIVED 2026-09-26 against 6.66.0 with an identical result: sufficiency

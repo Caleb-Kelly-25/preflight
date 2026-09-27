@@ -80,8 +80,9 @@ resources:
   - type: aws_sns_topic
     service: sns
     status: draft
-    # Create derived 2026-09-26, both fixture variants. Update and delete are not.
-    verified_operations: [create]
+    # Create and delete derived 2026-09-26; delete needed no new fixture, it
+    # reuses the create one. Update is not derived.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html
     # `name` is known at plan time when set explicitly, so a create resolves to a
     # real ARN rather than degrading to "*". Like SQS and unlike most services,

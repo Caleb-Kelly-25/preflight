@@ -51,8 +51,9 @@ resources:
     service: logs
     status: draft
     # Create derived 2026-09-26 from THREE fixture variants, which is what it took
-    # to attribute two separate gates. Update and delete are not derived.
-    verified_operations: [create]
+    # to attribute two separate gates. Delete derived the same day, reusing the
+    # maximal create fixture. Update is not derived.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazoncloudwatchlogs.html
     # `name` is known at plan time, so a create resolves to a real ARN instead of
     # degrading to "*" — unusual and worth having. See notes for the trailing
