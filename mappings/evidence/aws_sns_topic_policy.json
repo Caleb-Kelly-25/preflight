@@ -13,6 +13,19 @@
         "sns:GetTopicAttributes",
         "sns:SetTopicAttributes"
       ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_sns_topic_policy",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 3,
+      "actions": [
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes"
+      ]
     }
   ]
 }

@@ -371,7 +371,8 @@ resources:
     # Create derived 2026-09-26 and already correct, measured against a topic from
     # SUPPORT=./derivefixtures/support/sns_topic. Delete is the same
     # sns:SetTopicAttributes call and is not separately measured.
-    verified_operations: [create]
+    # Delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/sns_topic.
+    verified_operations: [create, delete]
     status: draft
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html
     # The `arn` attribute holds the target topic's complete ARN, so the template

@@ -14,6 +14,19 @@
       ],
       "backfilled": true,
       "note": "s3:GetBucketVersioning was missing. Minimality partial: one removal produced a non-denial outcome, so that action is kept on weaker evidence than a clean AccessDenied."
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_s3_bucket_versioning",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 3,
+      "actions": [
+        "s3:GetBucketVersioning",
+        "s3:PutBucketVersioning"
+      ]
     }
   ]
 }

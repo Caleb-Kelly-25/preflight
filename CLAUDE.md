@@ -324,6 +324,27 @@ the asymmetry against being "tidied up".
 Evidence files are read from disk, not embedded: they are a maintainer and CI
 artifact and have no business in the shipped binary.
 
+### A delete path usually needs a read on a DIFFERENT resource type
+
+Measured four times over, and now the most reliable predictor after the
+`read_actions`-empty one. Before deleting something, the provider checks whether
+anything depends on it:
+
+| Delete | Needs |
+|---|---|
+| `aws_iam_role` | `iam:ListInstanceProfilesForRole` |
+| `aws_iam_policy` | `iam:ListPolicyVersions` |
+| `aws_security_group` | `ec2:DescribeNetworkInterfaces` |
+| `aws_route53_zone` | `route53:GetDNSSEC`, `route53:ListResourceRecordSets` |
+
+**None of these is reachable by reasoning about the resource being deleted**, which
+is the point. Nobody writing a security-group entry from the docs would think to
+check network interfaces. When you write a delete path, assume a dependent-check
+action is missing until a run says otherwise.
+
+They also do not belong in `read_actions`, because the create path generally does
+not need them, and `read_actions` union into all three operations.
+
 ### Support fixtures, for types that cannot stand alone
 
 `--support ./derivefixtures/support/<name>` (or `SUPPORT=` via make) applies a

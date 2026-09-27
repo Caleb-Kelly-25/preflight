@@ -33,9 +33,17 @@ resource "aws_s3_bucket_policy" "probe" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Sid       = "InertDeny"
-      Effect    = "Deny"
-      Principal = { AWS = "arn:aws:iam::${var.account_id}:role/preflight-derive-support" }
+      Sid    = "InertDeny"
+      Effect = "Deny"
+      # The ACCOUNT ROOT, not a role. Naming a role made this fixture depend on two
+      # support resources instead of one, and AWS rejects a bucket policy whose
+      # principal does not exist ("MalformedPolicy: Invalid principal") — which is
+      # exactly how the delete derivation failed on 2026-09-27 once the bucket came
+      # from a support fixture that creates no role.
+      #
+      # Still inert: it DENIES a read on a path nothing uses, so it grants nobody
+      # anything and cannot deny the operator teardown either.
+      Principal = { AWS = var.account_id }
       Action    = "s3:GetObject"
       Resource  = "arn:aws:s3:::preflight-derive-support-${var.account_id}/never-used/*"
     }]

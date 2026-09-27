@@ -13,6 +13,19 @@
         "sqs:GetQueueAttributes",
         "sqs:SetQueueAttributes"
       ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_sqs_queue_policy",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 3,
+      "actions": [
+        "sqs:GetQueueAttributes",
+        "sqs:SetQueueAttributes"
+      ]
     }
   ]
 }

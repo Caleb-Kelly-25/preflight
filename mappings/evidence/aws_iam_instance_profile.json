@@ -17,6 +17,21 @@
       ],
       "backfilled": true,
       "note": "iam:PassRole and iam:GetRole are authorised against the ROLE, not the profile, so both sit under `references` and both are part of this measured set. Granting the instance-profile actions alone is not enough, which is what the entry claimed before."
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_iam_instance_profile",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 6,
+      "actions": [
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:GetRole",
+        "iam:RemoveRoleFromInstanceProfile"
+      ]
     }
   ]
 }

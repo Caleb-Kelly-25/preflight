@@ -98,7 +98,9 @@ resources:
     service: s3
     status: draft
     # Create derived by the harness 2026-09-25; update and delete were not.
-    verified_operations: [create]
+    # Delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/s3_bucket
+    # and already correct (s3:DeleteBucketPolicy).
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes:
@@ -122,18 +124,19 @@ resources:
       therefore wrong in the dangerous direction — it would have reported
       "allowed" for a deploy that cannot succeed.
 
-      Update and delete are unmeasured, but both are now derivable. Delete in
-      particular needs NO new fixture — it reuses the create fixture, applying it
-      with operator credentials and then destroying it under the scratch role.
-      That became possible on 2026-09-26, when the harness stopped conflating the
-      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
-      has not been run yet.
+      DELETE DERIVED 2026-09-26 and already correct. It needed no new fixture: a
+      delete reuses the create fixture, applied with operator credentials and then
+      destroyed under the scratch role.
+
+      UPDATE REMAINS UNMEASURED, and is the only gap left in this entry.
 
   - type: aws_s3_bucket_versioning
     service: s3
     status: draft
     # Create derived by the harness 2026-09-25; update and delete were not.
-    verified_operations: [create]
+    # Delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/s3_bucket
+    # and already correct (s3:PutBucketVersioning — destroying this SUSPENDS versioning rather than removing it).
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes:
@@ -164,12 +167,11 @@ resources:
       non-denial outcome, so that action is kept on weaker evidence than a clean
       AccessDenied.
 
-      Update and delete are unmeasured, but both are now derivable. Delete in
-      particular needs NO new fixture — it reuses the create fixture, applying it
-      with operator credentials and then destroying it under the scratch role.
-      That became possible on 2026-09-26, when the harness stopped conflating the
-      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
-      has not been run yet.
+      DELETE DERIVED 2026-09-26 and already correct. It needed no new fixture: a
+      delete reuses the create fixture, applied with operator credentials and then
+      destroyed under the scratch role.
+
+      UPDATE REMAINS UNMEASURED, and is the only gap left in this entry.
 
       Destroying this resource does not remove versioning; Terraform suspends
       it, which is still a PutBucketVersioning call.
@@ -178,7 +180,9 @@ resources:
     service: s3
     status: draft
     # Create derived by the harness 2026-09-25; update and delete were not.
-    verified_operations: [create]
+    # Delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/s3_bucket
+    # and already correct (s3:PutBucketPublicAccessBlock).
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes:
@@ -203,18 +207,19 @@ resources:
       therefore wrong in the dangerous direction — it would have reported
       "allowed" for a deploy that cannot succeed.
 
-      Update and delete are unmeasured, but both are now derivable. Delete in
-      particular needs NO new fixture — it reuses the create fixture, applying it
-      with operator credentials and then destroying it under the scratch role.
-      That became possible on 2026-09-26, when the harness stopped conflating the
-      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
-      has not been run yet.
+      DELETE DERIVED 2026-09-26 and already correct. It needed no new fixture: a
+      delete reuses the create fixture, applied with operator credentials and then
+      destroyed under the scratch role.
+
+      UPDATE REMAINS UNMEASURED, and is the only gap left in this entry.
 
   - type: aws_s3_bucket_server_side_encryption_configuration
     service: s3
     status: draft
     # Create derived by the harness 2026-09-25; update and delete were not.
-    verified_operations: [create]
+    # Delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/s3_bucket
+    # and already correct (s3:PutEncryptionConfiguration).
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
     arn_format: "arn:${Partition}:s3:::${BucketName}"
     arn_attributes:
@@ -240,12 +245,11 @@ resources:
       therefore wrong in the dangerous direction — it would have reported
       "allowed" for a deploy that cannot succeed.
 
-      Update and delete are unmeasured, but both are now derivable. Delete in
-      particular needs NO new fixture — it reuses the create fixture, applying it
-      with operator credentials and then destroying it under the scratch role.
-      That became possible on 2026-09-26, when the harness stopped conflating the
-      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
-      has not been run yet.
+      DELETE DERIVED 2026-09-26 and already correct. It needed no new fixture: a
+      delete reuses the create fixture, applied with operator credentials and then
+      destroyed under the scratch role.
+
+      UPDATE REMAINS UNMEASURED, and is the only gap left in this entry.
 
       The IAM action is s3:PutEncryptionConfiguration, NOT s3:PutBucketEncryption
       — the API operation and the IAM action have different names here. AWS's

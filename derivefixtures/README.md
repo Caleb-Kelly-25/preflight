@@ -203,6 +203,22 @@ under the scratch role. Splitting them cost one method.
 The operator cleanup still runs after every measured destroy, including the denied
 ones. Those are the attempts where a resource is guaranteed to be left standing.
 
+## What a delete path usually needs
+
+A provider checks for dependents before deleting, so a delete path tends to need a
+Describe or List against a **different** resource type than the one being deleted:
+
+| Delete | Needs |
+|---|---|
+| `aws_iam_role` | `iam:ListInstanceProfilesForRole` |
+| `aws_iam_policy` | `iam:ListPolicyVersions` |
+| `aws_security_group` | `ec2:DescribeNetworkInterfaces` |
+| `aws_route53_zone` | `route53:GetDNSSEC`, `route53:ListResourceRecordSets` |
+
+Four for four on the entries measured so far, and not one of them is reachable by
+reasoning about the resource being deleted — which is exactly why they were all
+missing until a run found them.
+
 ## Traps already paid for
 
 - **A provider `default_tags` block silently tags a "minimal" fixture**, so the

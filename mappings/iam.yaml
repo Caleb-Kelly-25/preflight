@@ -325,7 +325,8 @@ resources:
     service: iam
     status: draft
     # Create derived by the harness 2026-09-25; update and delete were not.
-    verified_operations: [create]
+    # Delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/iam_role.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
     arn_attributes:
@@ -349,18 +350,18 @@ resources:
       therefore wrong in the dangerous direction — it would have reported
       "allowed" for a deploy that cannot succeed.
 
-      Update and delete are unmeasured, but both are now derivable. Delete in
-      particular needs NO new fixture — it reuses the create fixture, applying it
-      with operator credentials and then destroying it under the scratch role.
-      That became possible on 2026-09-26, when the harness stopped conflating the
-      teardown that MEASURES with the teardown that CLEANS UP; this entry simply
-      has not been run yet.
+      DELETE DERIVED 2026-09-26 and already correct. It needed no new fixture: a
+      delete reuses the create fixture, applied with operator credentials and then
+      destroyed under the scratch role.
+
+      UPDATE REMAINS UNMEASURED, and is the only gap left in this entry.
 
   - type: aws_iam_role_policy
     service: iam
     status: draft
     # Create derived by the harness 2026-09-25; update and delete were not.
-    verified_operations: [create]
+    # Delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/iam_role.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:role/${RoleName}"
     arn_attributes:
@@ -396,7 +397,8 @@ resources:
     service: iam
     status: draft
     # Create derived by the harness 2026-09-25; update and delete were not.
-    verified_operations: [create]
+    # Delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/iam_role.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:instance-profile/${ProfileName}"
     arn_attributes:
@@ -446,8 +448,16 @@ resources:
       # Putting it in read_actions would scope it to this entry's own ARN, which
       # cmd/arncheck flags as a mismatch and which would report a policy
       # correctly scoped to the role as a missing permission.
+      # DELETE ADDED 2026-09-26 after measurement: the provider reads the role back
+      # when REMOVING it from the profile too, not only when adding it.
+      #
+      # The scoping here was exactly half right, which is the interesting part.
+      # iam:PassRole above is correctly limited to create and update — the same run
+      # did NOT report it missing, because removing a role from a profile does not
+      # pass it anywhere. Two references against the same attribute, needing
+      # different operation sets, and only measurement separates them.
       - action: iam:GetRole
         arn_from: role
         arn_format: "arn:${Partition}:iam::${Account}:role/${Name}"
-        operations: [create, update]
+        operations: [create, update, delete]
         when: { attribute_set: role }

@@ -156,7 +156,8 @@ resources:
     status: draft
     # Create was derived by the harness against provider 6.63.0 on 2026-09-25:
     # sufficiency proven, minimality proven. Delete and update were not.
-    verified_operations: [create]
+    # Delete derived 2026-09-26.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html
     arn_format: "arn:${Partition}:ec2:${Region}:${Account}:security-group/${GroupId}"
     arn_attributes:
@@ -217,6 +218,22 @@ resources:
           when: { attribute_changed: [tags, tags_all] }
       delete:
         - ec2:DeleteSecurityGroup
+        # MISSING UNTIL MEASURED 2026-09-26. AWS refuses to delete a security group
+        # that is still attached to a network interface, so the provider looks for
+        # attached ENIs before trying.
+        #
+        # This is the fourth instance of one pattern, now worth naming: a DELETE path
+        # often needs a Describe or List against a DIFFERENT resource type, because
+        # the provider checks for dependents first. The others are
+        # iam:ListInstanceProfilesForRole on a role delete, iam:ListPolicyVersions on
+        # a policy delete, and route53:GetDNSSEC plus
+        # route53:ListResourceRecordSets on a zone delete. None is reachable by
+        # reasoning about the resource being deleted.
+        #
+        # Not in read_actions: the create path was measured and does not need it, so
+        # unioning it into every operation would over-report on every security group
+        # creation.
+        - ec2:DescribeNetworkInterfaces
     notes: >-
       CREATE DERIVED BY THE HARNESS 2026-09-25 against AWS provider 6.63.0:
       sufficiency proven, minimality proven, 11 attempts. The six actions above
