@@ -206,6 +206,9 @@ resources:
   - type: aws_db_subnet_group
     service: rds
     status: draft
+    # Create and delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/vpc,
+    # which supplies the two subnets in different AZs that RDS requires. Update is not.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonrds.html
     arn_format: "arn:${Partition}:rds:${Region}:${Account}:subgrp:${Name}"
     arn_attributes:
@@ -221,9 +224,40 @@ resources:
     # entry's notes for the argument on both sides.
     read_actions:
       - rds:DescribeDBSubnetGroups
+      # MISSING UNTIL MEASURED 2026-09-26, on create AND delete — and PREDICTED before
+      # the run from aws_db_parameter_group, which needed the same action for the same
+      # reason. RDS does not return tags from its Describe calls, so reading any RDS
+      # resource back takes a second call.
+      #
+      # Two entries, same answer, so treat it as a property of the SERVICE: any RDS
+      # entry without rds:ListTagsForResource in its read set is probably wrong.
+      # Contrast ECS, where ecs:DescribeClusters returns tags inline and the
+      # equivalent action is surplus on create and delete.
+      - rds:ListTagsForResource
     operations:
       create:
         - rds:CreateDBSubnetGroup
+        # RDS CREATES ITS SERVICE-LINKED ROLE on the first subnet group in an account,
+        # and that requires the CALLER to hold this. Found the hard way on 2026-09-26:
+        # the derivation failed with
+        #
+        #   InvalidParameterValue: Missing necessary credentials.
+        #   ...UsingWithRDS.IAM.ServiceLinkedRoles.html
+        #
+        # in an account that had never used RDS, and the run only succeeded after
+        # AWSServiceRoleForRDS was created.
+        #
+        # PER-RESOURCE, NOT PER-SERVICE, and that distinction is measured rather than
+        # assumed: aws_db_parameter_group was derived successfully in the SAME account
+        # BEFORE the role existed, so it does not need this and does not list it.
+        #
+        # Over-reports for every account that already has the role, which is any
+        # account that has ever run RDS. Listed anyway, because the alternative is
+        # silently omitting a permission whose absence fails the very first RDS apply
+        # in a new account — the same trade as iam:CreateServiceLinkedRole on aws_lb.
+        - iam:CreateServiceLinkedRole
+        # GATE MEASURED both directions 2026-09-26: the tagged fixture derives it and
+        # derivefixtures/aws_db_subnet_group__minimal reports it surplus.
         - action: rds:AddTagsToResource
           when: { attribute_set: [tags, tags_all] }
       update:

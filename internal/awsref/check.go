@@ -96,24 +96,31 @@ func checkEntry(res mapping.Resource, typ string, get func(string) *Service) []F
 		return out
 	}
 
-	// An entry with no arn_format simulates against "*" by design, so there is
-	// no scoping claim to verify.
-	if res.ARNFormat == "" {
-		return out
-	}
-
-	// A format that is nothing but a single variable is a passthrough: the
-	// attribute already holds a complete ARN, so there is no shape here to
-	// compare against anything. Reporting that as a mismatch would be this
-	// tool's own false positive, which costs exactly what a false positive in
-	// the product costs — it teaches the reader to skim past the output.
-	if isPassthrough(res.ARNFormat) {
-		out = append(out, Finding{
-			Severity: Info, ResourceType: typ, Action: "(arn_format)",
-			Detail: fmt.Sprintf("%s is a passthrough of an attribute that already holds an ARN; "+
-				"its shape cannot be checked here, only by a real apply", res.ARNFormat),
-		})
-		return out
+	// TWO INDEPENDENT CHECKS LIVE IN THIS FUNCTION, and conflating them cost real
+	// coverage until 2026-09-26:
+	//
+	//   1. do the action NAMES exist?
+	//   2. does each action authorize against the resource type arn_format names?
+	//
+	// Only the second needs an arn_format. Returning early when there is nothing to
+	// scope-check silently skipped the FIRST check too, so every entry with a
+	// passthrough arn_format — aws_lb, aws_lb_listener, aws_lb_target_group,
+	// aws_kms_alias and the SNS pair — had no action-name validation at all. A typo
+	// in any of them would have passed CI.
+	if res.ARNFormat == "" || isPassthrough(res.ARNFormat) {
+		if isPassthrough(res.ARNFormat) {
+			// A format that is nothing but a single variable is a passthrough: the
+			// attribute already holds a complete ARN, so there is no shape to compare
+			// against anything. Reporting that as a mismatch would be this tool's own
+			// false positive, which costs exactly what a false positive in the product
+			// costs — it teaches the reader to skim past the output.
+			out = append(out, Finding{
+				Severity: Info, ResourceType: typ, Action: "(arn_format)",
+				Detail: fmt.Sprintf("%s is a passthrough of an attribute that already holds an ARN; "+
+					"its shape cannot be checked here, only by a real apply", res.ARNFormat),
+			})
+		}
+		return append(out, checkActionNames(svc, res, typ)...)
 	}
 
 	matched := svc.ResourceTypesMatching(res.ARNFormat)
@@ -134,6 +141,10 @@ func checkEntry(res mapping.Resource, typ string, get func(string) *Service) []F
 	}
 
 	for _, action := range entryActions(res) {
+		if !sameService(action, res.Service) {
+			out = append(out, crossService(typ, action))
+			continue
+		}
 		types, scopeless, known := svc.ResourceTypesFor(action)
 		switch {
 		case !known:
@@ -244,4 +255,49 @@ func Worst(findings []Finding) Severity {
 		}
 	}
 	return worst
+}
+
+// checkActionNames verifies only that the action names exist, for entries whose
+// arn_format cannot be scope-checked. See the comment in checkEntry for why this is
+// separate: skipping it along with the scope check left a whole class of entry
+// unvalidated.
+func checkActionNames(svc *Service, res mapping.Resource, typ string) []Finding {
+	var out []Finding
+	for _, action := range entryActions(res) {
+		if !sameService(action, res.Service) {
+			out = append(out, crossService(typ, action))
+			continue
+		}
+		if _, _, known := svc.ResourceTypesFor(action); !known {
+			out = append(out, Finding{
+				Severity: Warn, ResourceType: typ, Action: action,
+				Detail: "not listed in the service reference — check the spelling",
+			})
+		}
+	}
+	return out
+}
+
+// sameService reports whether an action belongs to the entry's own service.
+func sameService(action, service string) bool {
+	prefix, _, found := strings.Cut(action, ":")
+	return found && strings.EqualFold(prefix, service)
+}
+
+// crossService reports an action from another service without judging its spelling.
+//
+// This checker fetches ONE service reference per entry — the entry's own — so an
+// action like iam:CreateServiceLinkedRole simply is not in the document being
+// consulted. Reporting that as "check the spelling" is this tool's own false
+// positive, and it fired on aws_db_subnet_group the moment a real cross-service
+// requirement was added.
+//
+// Those actions are not unchecked: TestShippedDatabase's crossServiceActions
+// allowlist pins each one by exact name, so a typo fails the unit tests instead.
+func crossService(typ, action string) Finding {
+	return Finding{
+		Severity: Info, ResourceType: typ, Action: action,
+		Detail: "belongs to another service, so this entry's reference cannot confirm it; " +
+			"its spelling is pinned by crossServiceActions in TestShippedDatabase",
+	}
 }

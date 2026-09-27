@@ -1,0 +1,75 @@
+{
+  "resource_type": "aws_subnet",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_subnet",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 7,
+      "actions": [
+        "ec2:CreateSubnet",
+        "ec2:CreateTags",
+        "ec2:DescribeSubnets",
+        "ec2:ModifySubnetAttribute"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_subnet__tagsonly",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 8,
+      "actions": [
+        "ec2:CreateSubnet",
+        "ec2:CreateTags",
+        "ec2:DescribeSubnets"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_subnet__minimal",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 9,
+      "actions": [
+        "ec2:CreateSubnet",
+        "ec2:DescribeSubnets"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_subnet",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 7,
+      "actions": [
+        "ec2:DeleteSubnet",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeSubnets"
+      ]
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_subnet__update_tags",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 8,
+      "actions": [
+        "ec2:CreateTags",
+        "ec2:DeleteTags",
+        "ec2:DescribeSubnets"
+      ]
+    }
+  ]
+}

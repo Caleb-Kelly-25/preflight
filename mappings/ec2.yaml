@@ -118,6 +118,12 @@ resources:
   - type: aws_subnet
     service: ec2
     status: draft
+    # Create derived 2026-09-26 from THREE fixture variants (two gates, one of them a
+    # boolean), delete the same day, and update measured too — though update is not
+    # claimed: only its TAGS branch was measured, and the entry also maps
+    # ec2:ModifySubnetAttribute for attribute changes that no fixture exercised.
+    # All three runs used SUPPORT=./derivefixtures/support/vpc.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html
     arn_format: "arn:${Partition}:ec2:${Region}:${Account}:subnet/${SubnetId}"
     arn_attributes:
@@ -125,9 +131,17 @@ resources:
     context_keys:
       "aws:RequestTag/*":
         from: tags
+    # ec2:DescribeTags WAS HERE and was removed 2026-09-26 after being measured
+    # surplus in ALL THREE operations — create (three fixture variants), update and
+    # delete. That is the bar for narrowing a read set, set by the ECS case where an
+    # action surplus on create and delete turned out to be required on update.
+    #
+    # It is also the THIRD EC2 entry to shed it, after aws_vpc and
+    # aws_security_group: the provider reads tags back from each resource's own
+    # Describe call, so ec2:DescribeTags is never needed. Three for three. Do not add
+    # it to a fourth.
     read_actions:
       - ec2:DescribeSubnets
-      - ec2:DescribeTags
     operations:
       create:
         - ec2:CreateSubnet
@@ -140,6 +154,12 @@ resources:
         # defaults to TRUE — enable_dns_support on aws_vpc, for instance —
         # inverts that and the gate would drop the action precisely when it is
         # required. Do not gate on a boolean without checking its default.
+        # GATE MEASURED BOTH DIRECTIONS 2026-09-26, and this is the one the docs
+        # called "correct only by luck". `attribute_set` reads a `false` boolean as
+        # UNSET, so gating on a boolean is only safe when the attribute DEFAULTS to
+        # false — and map_public_ip_on_launch does. The luck held:
+        # derivefixtures/aws_subnet__tagsonly sets tags and leaves this attribute
+        # alone, and reports the action surplus. Luck is now evidence.
         - action: ec2:ModifySubnetAttribute
           when: { attribute_set: map_public_ip_on_launch }
       update:
@@ -150,6 +170,15 @@ resources:
           when: { attribute_changed: [tags, tags_all] }
       delete:
         - ec2:DeleteSubnet
+        # MISSING UNTIL MEASURED 2026-09-26, and PREDICTED before the run: AWS refuses
+        # to delete a subnet still holding a network interface, so the provider looks
+        # for attached ENIs first.
+        #
+        # This is the same action aws_security_group's delete needed, and the fifth
+        # instance of the rule in CLAUDE.md — a delete path usually needs a read on a
+        # DIFFERENT resource type, because the provider checks for dependents. The
+        # rule was written one commit before this run and predicted it correctly.
+        - ec2:DescribeNetworkInterfaces
 
   - type: aws_security_group
     service: ec2
