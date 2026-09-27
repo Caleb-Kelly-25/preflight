@@ -1,0 +1,31 @@
+{
+  "resource_type": "aws_sns_topic_subscription",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_sns_topic_subscription",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 5,
+      "actions": [
+        "sns:GetSubscriptionAttributes",
+        "sns:Subscribe"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_sns_topic_subscription",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 3,
+      "actions": [
+        "sns:GetSubscriptionAttributes",
+        "sns:Unsubscribe"
+      ]
+    }
+  ]
+}

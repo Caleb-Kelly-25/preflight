@@ -246,6 +246,26 @@ func run(args []string, stdout, stderr *os.File) error {
 		if err := support.Setup(ctx, 15*time.Minute); err != nil {
 			return fmt.Errorf("support fixture apply: %w", err)
 		}
+
+		// Hand the support stack's outputs to the measured fixture as Terraform
+		// variables. Needed whenever the parent's identifier is assigned by AWS and
+		// so cannot be a constant the two fixtures agree on — a Route 53 zone id, a
+		// KMS key id, an ELB ARN.
+		//
+		// The obvious alternative, a `data` source in the measured fixture looking
+		// the parent up by name, would be a measurement bug: data sources are read
+		// under the SCRATCH role, so the lookup's own permission would be discovered
+		// by the loop and attributed to the resource type under test.
+		outs, err := support.Outputs(ctx)
+		if err != nil {
+			return fmt.Errorf("reading support fixture outputs: %w", err)
+		}
+		for name, value := range outs {
+			if err := os.Setenv("TF_VAR_"+name, value); err != nil {
+				return fmt.Errorf("setting TF_VAR_%s: %w", name, err)
+			}
+			fmt.Fprintf(stdout, "  support output %s -> TF_VAR_%s\n", name, name)
+		}
 	}
 
 	if err := applier.Init(ctx); err != nil {

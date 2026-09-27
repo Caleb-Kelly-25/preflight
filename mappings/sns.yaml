@@ -270,6 +270,10 @@ resources:
 
   - type: aws_sns_topic_subscription
     service: sns
+    # Create and delete derived 2026-09-26 against a topic and an SQS endpoint from
+    # SUPPORT=./derivefixtures/support/sns_topic. Both minimal apart from the
+    # deliberately retained sns:SetSubscriptionAttributes; see the comment on it.
+    verified_operations: [create, delete]
     status: draft
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html
     # THE CONSIDERED PART OF THIS ENTRY. The template is the whole value of the
@@ -301,6 +305,11 @@ resources:
     operations:
       create:
         - sns:Subscribe
+        # MEASURED SURPLUS 2026-09-26 for a plain SQS subscription that sets none of
+        # the optional attributes, and RETAINED anyway — same reasoning as
+        # iam:DeletePolicyVersion. The run proves only that a BARE subscription does
+        # not need it; every attribute that would need it was absent from the fixture.
+        #
         # Deliberately NOT gated, and that is a choice to over-report. Subscribe
         # accepts an Attributes parameter, so a provider that passes everything
         # inline would never need this on create — but the subscription has half
@@ -359,6 +368,10 @@ resources:
 
   - type: aws_sns_topic_policy
     service: sns
+    # Create derived 2026-09-26 and already correct, measured against a topic from
+    # SUPPORT=./derivefixtures/support/sns_topic. Delete is the same
+    # sns:SetTopicAttributes call and is not separately measured.
+    verified_operations: [create]
     status: draft
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsns.html
     # The `arn` attribute holds the target topic's complete ARN, so the template

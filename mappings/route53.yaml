@@ -164,6 +164,11 @@ resources:
   - type: aws_route53_record
     service: route53
     status: draft
+    # Create and delete derived 2026-09-26 against a zone from
+    # SUPPORT=./derivefixtures/support/route53_zone, whose id is passed in as a
+    # Terraform variable. Update is the same ChangeResourceRecordSets call and is not
+    # separately measured.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonroute53.html
     # A record is not a resource AWS authorises against. Every call is authorised
     # against the HOSTED ZONE that contains it, which is why this entry's
@@ -177,6 +182,11 @@ resources:
     # GetResourceRecordSet call.
     read_actions:
       - route53:ListResourceRecordSets
+      # MISSING UNTIL MEASURED 2026-09-26, and required on create AND delete: the
+      # provider reads the containing zone before writing a record into it. Nobody
+      # reasoning from the docs would list it — a record operation looks like it
+      # concerns only the record.
+      - route53:GetHostedZone
 
     # Same fixed-target reference as the zone entry, and for the same reason:
     # ChangeResourceRecordSets returns a change id the provider polls.
@@ -223,6 +233,21 @@ resources:
       recoverable direction, and it is the first thing to fix if this entry is
       taken further.
 
-      route53:GetChange is listed, on reasoning rather than measurement: it was
-      measured missing for aws_route53_zone and a record change goes through the
-      identical propagation wait. That is the weakest claim in this entry.
+      CREATE AND DELETE DERIVED 2026-09-26 against provider 6.66.0, 6 attempts each,
+      sufficiency and minimality proven. Both needed the same four actions, which is
+      unsurprising: one API call serves create, update and delete here.
+
+      route53:GetHostedZone WAS MISSING. The provider reads the containing zone
+      before writing a record into it, and nobody reasoning from the docs would list
+      it — a record operation looks like it concerns only the record. This is the
+      second Route 53 action found by measurement that no amount of reading would
+      have produced, after route53:GetDNSSEC on the zone's delete path.
+
+      route53:GetChange is no longer reasoning: it was measured required here too,
+      which retires the caveat this note used to carry.
+
+      Measuring it needed the support fixture's OUTPUT rather than a shared constant,
+      because a zone id is assigned by AWS. A `data "aws_route53_zone"` lookup would
+      have been simpler and wrong: data sources are read under the scratch role, so
+      route53:ListHostedZonesByName would have been discovered by the loop and
+      attributed to this resource type, which does not need it.

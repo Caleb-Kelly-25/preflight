@@ -203,6 +203,10 @@ resources:
 
   - type: aws_cloudwatch_log_stream
     service: logs
+    # Create and delete derived 2026-09-26, both already correct. Measured with
+    # SUPPORT=./derivefixtures/support/cloudwatch_log_group so that the group's own
+    # create actions are not attributed to the stream.
+    verified_operations: [create, delete]
     status: draft
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazoncloudwatchlogs.html
     # This ARN is the considered part of the entry. The Resource types column

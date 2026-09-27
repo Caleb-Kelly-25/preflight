@@ -1,0 +1,31 @@
+{
+  "resource_type": "aws_cloudwatch_log_stream",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_cloudwatch_log_stream",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 3,
+      "actions": [
+        "logs:CreateLogStream",
+        "logs:DescribeLogStreams"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_cloudwatch_log_stream",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 3,
+      "actions": [
+        "logs:DeleteLogStream",
+        "logs:DescribeLogStreams"
+      ]
+    }
+  ]
+}

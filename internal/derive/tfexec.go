@@ -4,12 +4,14 @@ package derive
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -323,4 +325,56 @@ func tail(s string) string {
 		return s
 	}
 	return "..." + s[len(s)-max:]
+}
+
+// Outputs returns this workspace's Terraform outputs, flattened to strings.
+//
+// It exists so a SUPPORT fixture can hand generated identifiers to the measured
+// fixture. Most support resources can be referred to by a fixed name the two
+// fixtures agree on, but some cannot: a Route 53 zone id, a KMS key id and an ELB
+// ARN are all assigned by AWS and unknowable before the apply.
+//
+// The alternative was a `data` source in the measured fixture looking the parent up
+// by name — and that would be a measurement bug, not a style choice. Data sources
+// are read under the SCRATCH role, so the lookup's own permission
+// (route53:ListHostedZonesByName, say) would be discovered by the loop and
+// attributed to the resource type under test, which does not need it.
+//
+// Runs with operator credentials: a support stack is never touched by the scratch
+// role.
+func (t *TerraformApplier) Outputs(ctx context.Context) (map[string]string, error) {
+	args := append([]string{"output", "-json", "-no-color"}, t.stateArgs()...)
+	out, timedOut, err := t.run(ctx, 2*time.Minute, t.operatorEnv(), args...)
+	if timedOut {
+		return nil, errors.New("reading terraform outputs timed out")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading terraform outputs: %w: %s", err, tail(out))
+	}
+
+	var raw map[string]struct {
+		Value any `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		return nil, fmt.Errorf("parsing terraform outputs: %w", err)
+	}
+
+	vals := make(map[string]string, len(raw))
+	for name, o := range raw {
+		switch v := o.Value.(type) {
+		case string:
+			vals[name] = v
+		case bool:
+			vals[name] = strconv.FormatBool(v)
+		case float64:
+			// Terraform numbers arrive as float64. Render integers without a
+			// trailing ".0", since these become resource names and ids.
+			vals[name] = strconv.FormatFloat(v, 'f', -1, 64)
+		default:
+			// Lists and maps have no single sensible TF_VAR spelling, and guessing
+			// one would fail deep inside a later apply. Refuse clearly instead.
+			return nil, fmt.Errorf("support output %q is %T; only strings, numbers and bools can be passed to the measured fixture", name, o.Value)
+		}
+	}
+	return vals, nil
 }
