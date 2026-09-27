@@ -67,6 +67,9 @@ resources:
   - type: aws_dynamodb_table
     service: dynamodb
     status: draft
+    # Create derived 2026-09-26 from FOUR fixture variants, which is what it took to
+    # attribute three separate gates. Delete derived the same day. Update is not.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazondynamodb.html
     # `name` is required and known at plan time, so a create resolves to a real
     # ARN rather than degrading to "*" — a better position than most entries in
@@ -124,11 +127,26 @@ resources:
         # visible, safe direction; gating it would be the edit that can
         # under-report. Same call as rds:CreateDBInstance.
         - dynamodb:CreateTable
+        # ALL THREE GATES BELOW MEASURED IN BOTH DIRECTIONS, 2026-09-26. This entry
+        # has the most gates of any cheap type here, and a maximal/minimal pair
+        # could not have attributed them: dropping all three attributes at once
+        # only shows the three actions becoming unnecessary together. Four fixtures
+        # were needed, and this is the actual result —
+        #
+        #   fixture     tags ttl pitr | TagResource  UpdateTTL  UpdateCBU
+        #   maximal       y   y   y   |    req          req        req
+        #   __nopitr      y   y   -   |    req          req      SURPLUS
+        #   __ttlonly     -   y   -   |  SURPLUS        req      surplus
+        #   __minimal     -   -   -   |  surplus      SURPLUS    surplus
+        #
+        # Each action is required exactly when its own attribute is set, and
+        # surplus otherwise. That is what makes these measurement rather than
+        # plausible reasoning.
+        #
         # Tag-on-create: CreateTable accepts a Tags parameter, so no separate API
-        # call is expected — but the tagging action is still authorized. Same
-        # shape as iam:TagRole on CreateRole and ec2:CreateTags on CreateVpc,
-        # both MEASURED to be required with no separate call ever appearing.
-        # REASONED here from that precedent.
+        # call is made — the action is authorized anyway, the same shape as
+        # iam:TagRole on CreateRole and ec2:CreateTags on CreateVpc. That was
+        # reasoned from precedent and is now measured.
         - action: dynamodb:TagResource
           when: { attribute_set: [tags, tags_all] }
         # GENUINE SECOND CALLS, not extra permissions on CreateTable. Neither TTL
@@ -140,10 +158,17 @@ resources:
           when: { attribute_set: ttl }
         - action: dynamodb:UpdateContinuousBackups
           when: { attribute_set: point_in_time_recovery }
-        # Different APIs entirely. Gated because asking every user of this
-        # resource for restore and import permissions they will never use is a
-        # false positive on essentially every table in the world. Same reasoning
-        # as rds:RestoreDBInstanceFromDBSnapshot.
+        # STILL REASONING in the positive direction, deliberately. All four
+        # fixtures reported both surplus, which proves only that an ORDINARY table
+        # needs neither. Setting either attribute changes the table's entire
+        # creation mode — restore-from-backup, import-from-S3 — rather than adding
+        # an attribute to a normal create, so a fixture using one would be
+        # measuring a different operation and attributing it to this one.
+        #
+        # Gated because asking every user of this resource for restore and import
+        # permissions they will never use is a false positive on essentially every
+        # table in the world. Same reasoning as
+        # rds:RestoreDBInstanceFromDBSnapshot.
         - action: dynamodb:RestoreTableToPointInTime
           when: { attribute_set: restore_source_name }
         - action: dynamodb:ImportTable

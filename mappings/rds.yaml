@@ -250,6 +250,9 @@ resources:
   - type: aws_db_parameter_group
     service: rds
     status: draft
+    # Create and delete derived 2026-09-26 (three create fixtures, to attribute two
+    # gates). Update is not derived.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonrds.html
     arn_format: "arn:${Partition}:rds:${Region}:${Account}:pg:${Name}"
     arn_attributes:
@@ -266,9 +269,22 @@ resources:
     read_actions:
       - rds:DescribeDBParameterGroups
       - rds:DescribeDBParameters
+      # MISSING UNTIL MEASURED 2026-09-26, and required on create AND delete. RDS
+      # does not return tags from DescribeDBParameterGroups, so reading a group
+      # back takes a separate call.
+      #
+      # Worth contrasting with aws_ecs_cluster, measured the same day: there
+      # ecs:ListTagsForResource is SURPLUS, because ecs:DescribeClusters returns
+      # tags inline. Identical action name, opposite answer, same day. Whether a
+      # service hands tags back from its Describe call or demands a second one is
+      # per-service and not inferable — the same lesson as the three different
+      # tag-WRITE mechanisms, now for tag reads.
+      - rds:ListTagsForResource
     operations:
       create:
         - rds:CreateDBParameterGroup
+        # GATE MEASURED both directions 2026-09-26: the tagged fixtures derive it,
+        # derivefixtures/aws_db_parameter_group__minimal reports it surplus.
         - action: rds:AddTagsToResource
           when: { attribute_set: [tags, tags_all] }
         # CreateDBParameterGroup takes no parameters — it creates an empty group
@@ -276,6 +292,11 @@ resources:
         # following ModifyDBParameterGroup. This is the same shape as
         # s3:PutBucketTagging on a bucket create: a genuine second call, gated
         # because a group declaring no parameters genuinely does not make it.
+        # GATE MEASURED 2026-09-26 and it took a third fixture to attribute.
+        # derivefixtures/aws_db_parameter_group__tagsonly sets tags and NO
+        # parameter block, and reports this surplus — which is what shows the gate
+        # is keyed to `parameter` rather than the action being required on every
+        # create. A maximal/minimal pair could not have told those apart.
         - action: rds:ModifyDBParameterGroup
           when: { attribute_set: parameter }
       update:

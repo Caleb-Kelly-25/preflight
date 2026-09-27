@@ -1,0 +1,93 @@
+{
+  "resource_type": "aws_dynamodb_table",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_dynamodb_table",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "inconclusive",
+      "attempts": 13,
+      "actions": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:ImportTable",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:RestoreTableToPointInTime",
+        "dynamodb:TagResource",
+        "dynamodb:UpdateContinuousBackups",
+        "dynamodb:UpdateTimeToLive"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_dynamodb_table__nopitr",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 14,
+      "actions": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:TagResource",
+        "dynamodb:UpdateTimeToLive"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_dynamodb_table__ttlonly",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 15,
+      "actions": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:UpdateTimeToLive"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_dynamodb_table__minimal",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 16,
+      "actions": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:ListTagsOfResource"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_dynamodb_table",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 6,
+      "actions": [
+        "dynamodb:DeleteTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:ListTagsOfResource"
+      ]
+    }
+  ]
+}

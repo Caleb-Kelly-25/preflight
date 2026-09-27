@@ -1,0 +1,68 @@
+{
+  "resource_type": "aws_db_parameter_group",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_db_parameter_group",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 8,
+      "actions": [
+        "rds:AddTagsToResource",
+        "rds:CreateDBParameterGroup",
+        "rds:DescribeDBParameterGroups",
+        "rds:DescribeDBParameters",
+        "rds:ListTagsForResource",
+        "rds:ModifyDBParameterGroup"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_db_parameter_group__tagsonly",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 9,
+      "actions": [
+        "rds:AddTagsToResource",
+        "rds:CreateDBParameterGroup",
+        "rds:DescribeDBParameterGroups",
+        "rds:DescribeDBParameters",
+        "rds:ListTagsForResource"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_db_parameter_group__minimal",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 10,
+      "actions": [
+        "rds:CreateDBParameterGroup",
+        "rds:DescribeDBParameterGroups",
+        "rds:DescribeDBParameters",
+        "rds:ListTagsForResource"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_db_parameter_group",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 6,
+      "actions": [
+        "rds:DeleteDBParameterGroup",
+        "rds:DescribeDBParameterGroups",
+        "rds:DescribeDBParameters",
+        "rds:ListTagsForResource"
+      ]
+    }
+  ]
+}

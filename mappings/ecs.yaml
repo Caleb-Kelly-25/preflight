@@ -29,6 +29,10 @@ resources:
   - type: aws_ecs_cluster
     service: ecs
     status: draft
+    # Create and delete derived 2026-09-26 and both minimal. Update is NOT claimed:
+    # its tags branch was measured, but the `setting` and `configuration` branches
+    # were not, and a branch nobody measured is a false pass.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html
     arn_format: "arn:${Partition}:ecs:${Region}:${Account}:cluster/${ClusterName}"
     arn_attributes:
@@ -40,9 +44,26 @@ resources:
     # may be redundant — DescribeClusters accepts an `include: [TAGS]` parameter
     # and the provider may use it instead. Kept because over-reporting is the
     # safe direction; see notes.
+    # ecs:ListTagsForResource USED TO BE HERE and was moved to `update` on
+    # 2026-09-26. This is the first action ever removed from a read set in this
+    # database, so the bar is worth stating: all THREE operations were measured
+    # first, and only then was it narrowed.
+    #
+    #   create -> SURPLUS   (ecs:DescribeClusters returns tags inline)
+    #   delete -> SURPLUS
+    #   update -> REQUIRED
+    #
+    # Create and delete alone would have argued for deleting it outright, and that
+    # would have been a false pass: an update genuinely needs it. read_actions are
+    # unioned into all three operations, so the honest home for an action needed by
+    # exactly one of them is that operation.
+    #
+    # Contrast rds:ListTagsForResource on aws_db_parameter_group, measured the same
+    # day, which IS needed on create and delete because RDS does not return tags
+    # from its Describe call. Identical action name, opposite answer — whether a
+    # service hands tags back inline is per-service and not inferable.
     read_actions:
       - ecs:DescribeClusters
-      - ecs:ListTagsForResource
     operations:
       create:
         - ecs:CreateCluster
@@ -52,7 +73,19 @@ resources:
         - action: ecs:TagResource
           when: { attribute_set: [tags, tags_all] }
       update:
+        # MEASURED REQUIRED on update and surplus on create and delete, hence its
+        # move out of read_actions. Unconditional here: it was measured for a
+        # tags-only change, and whether a setting or configuration change also
+        # needs it is unmeasured, so over-reporting is the safe side.
+        - ecs:ListTagsForResource
+        # MEASURED SURPLUS for a tags-only update and RETAINED anyway, on the same
+        # reasoning as iam:DeletePolicyVersion. The `configuration` block — execute
+        # command logging, managed storage encryption — is written by this call, and
+        # no fixture has exercised it. Gating it on `configuration` would be a
+        # narrowing justified by a measurement that never tested the positive case.
         - ecs:UpdateCluster
+        # GATE CONFIRMED in the negative direction 2026-09-26: a tags-only update
+        # reports this surplus. The positive case (a `setting` change) is unmeasured.
         - action: ecs:UpdateClusterSettings
           when: { attribute_changed: [setting] }
         - action: ecs:TagResource

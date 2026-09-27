@@ -1,0 +1,60 @@
+{
+  "resource_type": "aws_ecs_cluster",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_ecs_cluster",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 6,
+      "actions": [
+        "ecs:CreateCluster",
+        "ecs:DescribeClusters",
+        "ecs:TagResource"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_ecs_cluster__minimal",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 7,
+      "actions": [
+        "ecs:CreateCluster",
+        "ecs:DescribeClusters"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_ecs_cluster",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 5,
+      "actions": [
+        "ecs:DeleteCluster",
+        "ecs:DescribeClusters"
+      ]
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_ecs_cluster__update_tags",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 9,
+      "actions": [
+        "ecs:DescribeClusters",
+        "ecs:ListTagsForResource",
+        "ecs:TagResource",
+        "ecs:UntagResource"
+      ]
+    }
+  ]
+}
