@@ -193,9 +193,14 @@ resources:
 
   - type: aws_iam_policy
     service: iam
-    status: draft
-    # All three operations derived: create 2026-09-25, update and delete 2026-09-26.
-    verified_operations: [create, update, delete]
+    # VERIFIED 2026-09-26. All three operations are machine-measured — create
+    # 2026-09-25, update and delete 2026-09-26 — with the transcripts in
+    # mappings/evidence/aws_iam_policy.json rather than in this prose.
+    #
+    # Update is complete because `policy` and `tags` are the only attributes AWS can
+    # change in place; name, path and description all force replacement, which
+    # Terraform plans as delete plus create, both of which are measured.
+    status: verified
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagement.html
     arn_format: "arn:${Partition}:iam::${Account}:policy/${PolicyName}"
     arn_attributes:
