@@ -1,0 +1,57 @@
+{
+  "resource_type": "aws_lb_target_group",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_lb_target_group",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 11,
+      "actions": [
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeVpcs",
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DescribeTags",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:ModifyTargetGroupAttributes"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_lb_target_group__minimal",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 12,
+      "actions": [
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeVpcs",
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DescribeTags",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:ModifyTargetGroupAttributes"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_lb_target_group",
+      "derived_at": "2026-09-27",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 5,
+      "actions": [
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:DescribeTags",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "elasticloadbalancing:DescribeTargetGroups"
+      ]
+    }
+  ]
+}

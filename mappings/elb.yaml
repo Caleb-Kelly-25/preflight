@@ -7,12 +7,19 @@
 # Names checked 2026-09-26 against AWS's machine-readable service reference
 # (the same source `go run ./cmd/arncheck` uses), not against a docs page.
 #
-# COMPLETENESS IS UNESTABLISHED. Nothing here has been derived — no fixture has
-# been run, and on the record so far that means these entries are probably
-# missing something: every entry in this database whose create path was later
-# derived turned out to be wrong, and always by omission. Treat the action lists
-# as a starting point for derivation, not as an answer. All three are `draft`,
-# so every finding is capped at `Likely`.
+# aws_lb_target_group's CREATE AND DELETE ARE DERIVED (2026-09-26, provider 6.66.0)
+# and the create was wrong by omission, like every other entry ever measured —
+# ec2:DescribeVpcs and ec2:DescribeInternetGateways were both absent.
+#
+# THAT RESULT PROBABLY APPLIES TO THE WHOLE FILE. ELB validates the VPC a resource
+# names and inspects its internet gateway, and aws_lb names subnets and security
+# groups in that same VPC, so assume aws_lb and aws_lb_listener need ec2: reads too
+# until a run says otherwise. Both remain unmeasured because they bill by the hour
+# and need a live load balancer.
+#
+# Every entry in this database whose create path was later derived turned out to be
+# wrong, always by omission, so treat the two unmeasured action lists as a starting
+# point rather than an answer.
 #
 # WHY ALL THREE ARNs ARE PASSTHROUGHS OF THE COMPUTED `arn` ATTRIBUTE
 #
@@ -124,19 +131,38 @@ resources:
       neither free nor instant. That is the reason it is unmeasured, and it is
       the reason to expect omissions rather than to assume there are none.
 
-      Two things a derivation should settle first. Whether
-      elasticloadbalancing:AddTags is authorised as part of CreateLoadBalancer or
-      needs a separate call — the answer differs by service and has never been
-      guessable. And whether the caller needs any ec2: reads for the subnets and
-      security groups it names; none are listed here, because ec2:DescribeTags
-      has already been a surplus guess twice in this database and guessing again
-      is not free.
+      THE SECOND OPEN QUESTION IN THIS NOTE IS NOW PARTLY ANSWERED, and the answer
+      is the one that mattered. It asked whether the caller needs any ec2: reads for
+      the subnets and security groups a load balancer names, and declined to guess.
+      Deriving aws_lb_target_group on 2026-09-26 found that ELB requires
+      ec2:DescribeVpcs AND ec2:DescribeInternetGateways from the caller — it
+      validates the VPC and checks its internet gateway. A load balancer names
+      subnets in a VPC, so assume this entry needs them too; it is listed as an
+      expectation rather than added, because this entry has not been run.
+
+      Declining to guess was right. Guessing ec2:DescribeTags would have been wrong
+      three times over, and guessing these two would have been right for a reason
+      nobody had — ELB checking internet gateways is not something the docs suggest.
+
+      Still open: whether elasticloadbalancing:AddTags is authorised as part of
+      CreateLoadBalancer or needs a separate call. On aws_lb_target_group it WAS
+      required with tags set and surplus without, so the gate holds there; whether
+      the load balancer behaves the same way is unmeasured.
+
+      Deriving this entry is more expensive than most: an Application Load Balancer
+      needs a VPC with two subnets in different availability zones and bills by the
+      hour. derivefixtures/support/vpc now provides the subnets, so the remaining
+      cost is the hourly charge and the apply time.
 
       iam:CreateServiceLinkedRole over-reports by design. See the comment on it.
 
   - type: aws_lb_target_group
     service: elasticloadbalancing
     status: draft
+    # Create and delete derived 2026-09-26 with SUPPORT=./derivefixtures/support/vpc.
+    # Update is not: this entry has seven gated attributes, the most in the database,
+    # and each gate needs its own fixture.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_elasticloadbalancingv2.html
     arn_format: "${TargetGroupArn}"
     arn_attributes:
@@ -145,6 +171,11 @@ resources:
       "aws:RequestTag/*":
         from: tags
 
+    # All three MEASURED REQUIRED on create and delete, 2026-09-26. Worth noting that
+    # elasticloadbalancing:DescribeTags is genuinely needed, where ECS's equivalent
+    # (ecs:ListTagsForResource) was measured SURPLUS because DescribeClusters returns
+    # tags inline. Third service, third answer on tag read-backs — it is not
+    # inferable.
     read_actions:
       - elasticloadbalancing:DescribeTargetGroups
       - elasticloadbalancing:DescribeTargetGroupAttributes
@@ -153,12 +184,31 @@ resources:
     operations:
       create:
         - elasticloadbalancing:CreateTargetGroup
-        # Same shape as ModifyLoadBalancerAttributes: deregistration_delay,
-        # stickiness, slow_start, load_balancing_algorithm_type and the
-        # preserve-client-IP settings are attributes, not CreateTargetGroup
-        # parameters, so a second call follows the create. Ungated for the same
-        # reason — the list grows with each provider release.
+        # BOTH MISSING UNTIL MEASURED 2026-09-26, and neither is reachable by
+        # reasoning. ELB validates the VPC a target group names, and checks whether
+        # that VPC has an internet gateway — which decides what target types and
+        # address types are eligible. So creating a target group needs two EC2 READS
+        # from the caller, on an entry whose own service is elasticloadbalancing.
+        #
+        # This file's notes already named it as the open question: "whether the caller
+        # needs any ec2: reads for the subnets and security groups it names; none are
+        # listed here, because ec2:DescribeTags has already been a surplus guess twice
+        # and guessing again is not free." Not guessing was right; the answer is yes,
+        # and it took a run to get it.
+        #
+        # Measured required by BOTH fixture variants, so unconditional. Not in
+        # read_actions, because the delete path was measured and needs neither.
+        - ec2:DescribeVpcs
+        - ec2:DescribeInternetGateways
+        # REASONING CONFIRMED 2026-09-26. deregistration_delay, stickiness,
+        # slow_start, load_balancing_algorithm_type and the preserve-client-IP
+        # settings are attributes rather than CreateTargetGroup parameters, so a
+        # second call follows every create. The MINIMAL fixture — no tags, no health
+        # check, no stickiness — still needs this, which is what proves the
+        # "ungated" choice right rather than merely cautious.
         - elasticloadbalancing:ModifyTargetGroupAttributes
+        # GATE MEASURED both directions 2026-09-26: the tagged fixture derives it and
+        # derivefixtures/aws_lb_target_group__minimal reports it surplus.
         - action: elasticloadbalancing:AddTags
           when: { attribute_set: [tags, tags_all] }
 

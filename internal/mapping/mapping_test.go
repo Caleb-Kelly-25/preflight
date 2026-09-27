@@ -218,8 +218,17 @@ resources:
 var crossServiceActions = map[string]bool{
 	// ELB creates its service-linked role on the FIRST load balancer in an
 	// account, and the caller must hold this for that to succeed. Over-reports
-	// for every account that already has the role. See mappings/elb.yaml.
+	// for every account that already has the role. See mappings/elb.yaml. RDS
+	// needs the same action for a DB subnet group, measured 2026-09-26.
 	"iam:CreateServiceLinkedRole": true,
+
+	// MEASURED, not assumed. Creating an aws_lb_target_group needs both: ELB
+	// validates the VPC the target group names, and checks whether that VPC has an
+	// internet gateway to decide which target and address types are eligible.
+	// Neither was in the entry, and neither is reachable by reasoning about load
+	// balancing. See mappings/elb.yaml.
+	"ec2:DescribeVpcs":             true,
+	"ec2:DescribeInternetGateways": true,
 }
 
 // TestShippedDatabase guards the mapping files we actually ship. A broken entry
