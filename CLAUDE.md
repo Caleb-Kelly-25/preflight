@@ -324,6 +324,26 @@ the asymmetry against being "tidied up".
 Evidence files are read from disk, not embedded: they are a maintainer and CI
 artifact and have no business in the shipped binary.
 
+### Support fixtures, for types that cannot stand alone
+
+`--support ./derivefixtures/support/<name>` (or `SUPPORT=` via make) applies a
+second Terraform workspace once per run with operator credentials, before the loop,
+and destroys it after the measured fixture. The scratch role never touches it.
+
+It exists for a correctness reason, not convenience: creating a dependency inside
+the measured fixture makes the derivation discover that dependency's own create
+actions and attribute them to the wrong resource type.
+
+It needed no new machinery — `Setup` already applies with operator credentials and
+`Destroy` already tears down with them, so a support stack is a second
+`TerraformApplier` with `Creds` left nil, which makes it impossible to apply under
+the scratch role by mistake.
+
+**One trap, paid for once:** `defer` is LIFO, so the support stack's
+`os.RemoveAll(workdir)` must be registered BEFORE the teardown function, or it runs
+first and deletes the directory `terraform destroy` still needs. That leaked a real
+queue on the first run.
+
 ### Deriving a delete: measure the teardown, then clean up anyway
 
 ```

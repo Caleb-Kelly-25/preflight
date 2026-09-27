@@ -118,6 +118,40 @@ replace is a create plus a delete wearing an update's name. Check the provider
 docs for `ForceNew` before picking the attribute to vary. `aws_iam_policy`'s
 `name` and `description` are both in that category.
 
+## Support fixtures: dependencies the measured type needs
+
+Some types cannot be measured alone. An inline role policy needs a role, a log
+stream needs a log group, an SQS queue policy needs a queue.
+
+**Do not create the dependency inside the measured fixture.** That is a correctness
+bug, not a shortcut: the apply would also need the dependency's own create actions,
+the derivation would discover them, and they would land in your resource type's
+action list although they belong to another type entirely. A derived set only means
+anything if the fixture exercises exactly one resource type.
+
+Put it in a separate directory under `derivefixtures/support/` and pass it with
+`SUPPORT=`:
+
+```
+make derive TYPE=aws_sqs_queue_policy   FIXTURE=./derivefixtures/aws_sqs_queue_policy   SUPPORT=./derivefixtures/support/sqs_queue
+```
+
+The harness applies it **once per run with operator credentials**, before the loop,
+and destroys it after — after the measured fixture, since the measured resource
+depends on it. The scratch role never applies it and never needs permission for it.
+
+Conventions:
+
+- **Name support resources `preflight-derive-support-*`** and refer to them from the
+  measured fixture by that fixed name. Passing Terraform outputs between two
+  separate workspaces would need remote state or a wrapper; a documented constant is
+  simpler and a maintainer tool can afford it.
+- **Keep whatever the measured resource writes permissive.** A deny-all policy on a
+  support queue or bucket can deny the harness's own operator teardown, which aborts
+  the run and leaks the resource.
+- One support fixture can serve several measured fixtures. Add resources to an
+  existing one rather than duplicating it.
+
 ## Delete paths need no fixture of their own
 
 A delete reuses the type's create fixture. The harness applies it with **operator**

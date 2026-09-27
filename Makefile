@@ -54,7 +54,8 @@ derive:
 	@test -n "$(PREFLIGHT_DERIVE_ACCOUNT)" || { echo "set PREFLIGHT_DERIVE_ACCOUNT=<scratch-account-id>"; exit 1; }
 	PREFLIGHT_DERIVE_CONFIRM=creates-real-resources \
 		go run -tags awsderive ./cmd/derive --type $(TYPE) --fixture $(FIXTURE) \
-			--operation $(or $(OPERATION),create)
+			--operation $(or $(OPERATION),create) \
+			$(if $(SUPPORT),--support $(SUPPORT),)
 
 # The tagged code is excluded from every normal build, so without this it would
 # rot unnoticed. Mirrors contract-build.

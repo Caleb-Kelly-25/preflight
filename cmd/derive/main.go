@@ -50,6 +50,9 @@ func run(args []string, stdout, stderr *os.File) error {
 		maxAttempts  = fs.Int("max-attempts", 15, "cap on discovery attempts")
 		evidenceDir  = fs.String("evidence-dir", filepath.Join("mappings", "evidence"),
 			"where to record the run's transcript; empty to skip")
+		supportDir = fs.String("support", "",
+			"directory holding a support fixture: resources the measured fixture depends on, "+
+				"applied once with operator credentials and destroyed after the run")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -122,6 +125,48 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	defer os.RemoveAll(stateDir)
 
+	// SUPPORT FIXTURE. Some resource types cannot be measured alone: an inline role
+	// policy needs a role, a log stream needs a log group, an SQS queue policy
+	// needs a queue. Creating that dependency INSIDE the measured fixture would be
+	// a correctness bug rather than a shortcut — the apply would then also need the
+	// dependency's own create actions, the derivation would discover them, and they
+	// would land in this resource type's action list although they belong to
+	// another type entirely. A derived set only means anything if the fixture
+	// exercises exactly one resource type.
+	//
+	// So a support fixture is a SEPARATE Terraform workspace, applied once with
+	// operator credentials and destroyed after the run. It is never measured and
+	// the scratch role never applies it: leaving Creds nil means there is no way
+	// for this stack to be applied under the scratch role even by mistake.
+	//
+	// STAGED HERE, ABOVE THE TEARDOWN DEFER, AND THAT ORDER IS LOAD-BEARING.
+	// Deferred calls run last-in-first-out, so a `defer os.RemoveAll(...)`
+	// registered after the teardown function runs BEFORE it — which deleted the
+	// support stack's working directory while `terraform destroy` still needed it,
+	// and leaked a real queue. Registering the directory cleanups first means they
+	// run last.
+	var support *derive.TerraformApplier
+	if *supportDir != "" {
+		supportWork, err := copyFixture(*supportDir)
+		if err != nil {
+			return fmt.Errorf("staging the support fixture: %w", err)
+		}
+		defer os.RemoveAll(supportWork)
+
+		supportState, err := os.MkdirTemp("", "preflight-derive-support-state-")
+		if err != nil {
+			return fmt.Errorf("creating the support state directory: %w", err)
+		}
+		defer os.RemoveAll(supportState)
+
+		support = &derive.TerraformApplier{
+			Dir:          supportWork,
+			Region:       *region,
+			StateDir:     supportState,
+			SetupApplies: true,
+		}
+	}
+
 	applier := &derive.TerraformApplier{
 		Dir:      workDir,
 		Region:   *region,
@@ -129,19 +174,13 @@ func run(args []string, stdout, stderr *os.File) error {
 		Creds:    func() derive.Credentials { return grantor.Latest },
 	}
 
-	// A create acts on nothing, so it needs no before-state and the fixture is
-	// applied as written. An update does: the resource has to exist, created with
-	// operator credentials so its creation is not part of what gets measured.
+	// What the scratch role does, and therefore what gets measured.
 	//
-	// The convention is a `phase` variable — 1 is the before shape, 2 is the
-	// after. Requiring it EXPLICITLY, and refusing to run without it, is the
-	// point: a fixture with no phase variable applies identically in both
-	// phases, the scratch role would perform the create, and the run would
-	// report the create path under the name "update". A wrong mapping presented
-	// as measured is the one failure this whole tool exists to prevent, so the
-	// driver would rather not run at all.
-	// Which lifecycle step the scratch role performs. Apply for create and update;
-	// destroy for delete.
+	// A create acts on nothing, so it needs no before-state: the scratch role
+	// applies the fixture as written. An update and a delete both act on something
+	// that must already exist, so `Setup` creates it with OPERATOR credentials —
+	// otherwise the create would be folded into the measurement and there would be
+	// no way to separate the two.
 	measure := derive.StepApply
 
 	switch *operation {
@@ -182,12 +221,32 @@ func run(args []string, stdout, stderr *os.File) error {
 		if err := applier.Destroy(tctx); err != nil {
 			fmt.Fprintf(stderr, "WARNING: destroy failed, resources may survive: %v\n", err)
 		}
+		// After the measured fixture, never before: the measured resource depends on
+		// the support one, so tearing the support stack down first would leave the
+		// dependent resource undeletable.
+		if support != nil {
+			if err := support.Destroy(tctx); err != nil {
+				fmt.Fprintf(stderr, "WARNING: support fixture destroy failed, resources may survive: %v\n", err)
+			}
+		}
 		if err := grantor.Revoke(tctx); err != nil {
 			fmt.Fprintf(stderr, "WARNING: could not remove scratch role %s: %v\n", roleName, err)
 		} else {
 			fmt.Fprintf(stdout, "\nscratch role %s removed\n", roleName)
 		}
 	}()
+
+	// Bring the support stack up before the loop starts. Its teardown is armed in
+	// the deferred block above, which runs after the measured fixture's.
+	if support != nil {
+		if err := support.Init(ctx); err != nil {
+			return fmt.Errorf("support fixture terraform init: %w", err)
+		}
+		fmt.Fprintf(stdout, "bringing up the support fixture from %s\n", *supportDir)
+		if err := support.Setup(ctx, 15*time.Minute); err != nil {
+			return fmt.Errorf("support fixture apply: %w", err)
+		}
+	}
 
 	if err := applier.Init(ctx); err != nil {
 		return fmt.Errorf("terraform init: %w", err)

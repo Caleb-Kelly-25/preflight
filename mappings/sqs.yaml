@@ -209,6 +209,10 @@ resources:
 
   - type: aws_sqs_queue_policy
     service: sqs
+    # Create derived 2026-09-26 and already correct. First entry measured using a
+    # SUPPORT fixture: the queue it attaches to is created out of band with operator
+    # credentials, so sqs:CreateQueue and its read-backs are not attributed here.
+    verified_operations: [create]
     status: draft
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsqs.html
     # NO arn_format, ON PURPOSE, and this is the known defect in this entry.
