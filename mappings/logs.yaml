@@ -203,11 +203,16 @@ resources:
 
   - type: aws_cloudwatch_log_stream
     service: logs
-    # Create and delete derived 2026-09-26, both already correct. Measured with
-    # SUPPORT=./derivefixtures/support/cloudwatch_log_group so that the group's own
-    # create actions are not attributed to the stream.
-    verified_operations: [create, delete]
-    status: draft
+    # VERIFIED 2026-09-26. Create and delete were both derived and both already
+    # correct, measured with SUPPORT=./derivefixtures/support/cloudwatch_log_group so
+    # the group's own create actions are not attributed to the stream.
+    #
+    # `verified` rather than verified_operations because this entry maps NO update: a
+    # log stream has only a name and a group, and both force replacement. Every
+    # operation it has is measured, so there is nothing left to qualify. It was
+    # sitting at `draft` with a complete set of verified_operations, which understated
+    # it.
+    status: verified
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazoncloudwatchlogs.html
     # This ARN is the considered part of the entry. The Resource types column
     # gives CreateLogStream, DeleteLogStream and DescribeLogStreams the log-GROUP

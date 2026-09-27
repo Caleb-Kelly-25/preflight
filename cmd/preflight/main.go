@@ -450,9 +450,39 @@ func runMappings(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "%-52s %-8s %s\n", t, status, strings.Join(ops, ","))
 	}
-	fmt.Fprintf(stdout, "\n%d resource types mapped, %d verified, %d partially verified\n",
+	fmt.Fprintf(stdout, "\n%d resource types mapped, %d fully verified, %d partially verified\n",
 		len(types), verified, partial)
-	fmt.Fprintln(stdout, "* marks an operation established empirically; unmarked operations cap findings at Likely")
+
+	// PER-OPERATION COVERAGE, reported because it is what the engine actually uses.
+	// engine.collect caps a finding when VerifiedFor(op) is false — per OPERATION,
+	// not per entry — so an entry whose create is measured yields Verified findings
+	// for a create-only plan whatever its overall status says.
+	//
+	// Reporting only the entry counts understates the database badly, because those
+	// counts are gated by the update path: the most expensive operation to measure
+	// and the least often needed. A user planning only creates cares about the
+	// create row and nothing else on this page.
+	fmt.Fprintln(stdout, "\nby operation, which is how findings are actually capped:")
+	for _, op := range []mapping.Operation{mapping.OpCreate, mapping.OpUpdate, mapping.OpDelete} {
+		var mapped, proven int
+		for _, t := range types {
+			r, _ := db.Lookup(t)
+			if len(r.Operations[op]) == 0 {
+				continue
+			}
+			mapped++
+			if r.VerifiedFor(op) {
+				proven++
+			}
+		}
+		if mapped == 0 {
+			continue
+		}
+		fmt.Fprintf(stdout, "  %-7s %2d of %2d entries measured (%d%%)\n",
+			op, proven, mapped, 100*proven/mapped)
+	}
+
+	fmt.Fprintln(stdout, "\n* marks an operation established empirically; unmarked operations cap findings at Likely")
 	return exitOK
 }
 
