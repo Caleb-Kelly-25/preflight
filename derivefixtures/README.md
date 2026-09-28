@@ -219,6 +219,26 @@ Four for four on the entries measured so far, and not one of them is reachable b
 reasoning about the resource being deleted — which is exactly why they were all
 missing until a run found them.
 
+## Names that cannot be reused
+
+Some services refuse to recreate a resource under a name just deleted, and a
+derivation loop does exactly that on every attempt:
+
+| Service | Rule | Fixture uses |
+|---|---|---|
+| SQS | a queue name is unavailable for **60 seconds** after deletion | `name_prefix` |
+| S3 | a bucket name is not reliably reusable immediately | `bucket_prefix` |
+
+Use the **provider's own prefix feature**, not a trick like `uuid()` in the name,
+which makes every plan non-deterministic and can produce "provider produced
+inconsistent result". It also exercises `arn_prefix_attributes`, which is otherwise
+untested against a real apply.
+
+**The trade-off is worth knowing.** A fixed name makes a leak LOUD — the next run
+collides and fails. A prefix makes every attempt unique, so a failed teardown leaks
+silently and the leaks accumulate. Sweep by the `preflight-derive` tag after any run
+using a prefix.
+
 ## Traps already paid for
 
 - **A provider `default_tags` block silently tags a "minimal" fixture**, so the

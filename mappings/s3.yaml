@@ -77,7 +77,47 @@ resources:
     notes: >-
       VERIFIED EMPIRICALLY 2026-09-01, provider v5.100.0. A role holding exactly
       these 17 actions applies and destroys a tagged bucket; removing any one of
-      them fails. The previous entry claimed 3 actions and was wrong in the
+      them fails. The 17 spans BOTH operations — 2 create actions, 1 delete action
+      and 14 read-backs — which is why the create evidence records 16 and is not a
+      discrepancy.
+
+      RE-DERIVED BY THE HARNESS 2026-09-27 against provider 6.66.0, and this run
+      matters more than the mapping it confirms: it is the harness's own regression
+      test. aws_s3_bucket is the only entry whose true answer was established
+      INDEPENDENTLY of the harness, so re-deriving it is the only available check
+      that the tool's answers can be trusted at all. Sixteen mapping corrections had
+      been made on its word before anyone ran it against a case with a known answer.
+
+      It reproduced the create set exactly: the same 16 actions, zero missing, zero
+      surplus, across two provider major versions.
+
+      It also reproduced the hand-run's strangest finding, which is the stronger
+      result. Removing s3:ListBucket does NOT deny — the provider retries HeadBucket
+      until the apply times out. The harness detected the stall, recorded it as
+      evidence, stopped the run rather than measuring against an account it could no
+      longer describe, and warned that a bucket might survive. One had. That is the
+      whole OutcomeStalled design working end to end on the case that motivated it.
+
+      Minimality came back PARTIAL for that reason: the stall halts minimisation by
+      design, so the actions after s3:ListBucket in the removal order are unproven by
+      THIS run. They were proven by the 2026-09-01 hand-run.
+
+      DELETE RE-DERIVED the same day and fully minimised: 14 actions, s3:DeleteBucket
+      plus 13 read-backs. Union with create gives exactly the hand-run's 17.
+
+      s3:ListBucket is SURPLUS on delete, and is kept because create genuinely needs
+      it — a create without it does not fail, it HANGS. read_actions union into all
+      three operations, so it over-reports on delete by one action. Moving it to
+      create-only would need the update path measured first, which is the rule the
+      ECS case established.
+
+      The delete run needed a SECOND fixture, derivefixtures/aws_s3_bucket__prefix.
+      A delete derivation recreates the same resource every attempt, and S3 will not
+      reliably let a bucket name be reused immediately after deletion — the
+      fixed-name run proved sufficiency and then failed minimisation on a setup
+      error that had nothing to do with permissions. Same shape as SQS's 60-second
+      cooldown, same fix: the provider's own bucket_prefix. That also exercised
+      arn_prefix_attributes against a real apply for the first time on S3. The previous entry claimed 3 actions and was wrong in the
       dangerous direction — it would have reported "allowed" for a deploy that
       cannot succeed.
 

@@ -80,6 +80,84 @@
         "s3:ListBucket"
       ],
       "backfilled": true
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_s3_bucket",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "partial",
+      "attempts": 16,
+      "actions": [
+        "s3:CreateBucket",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketAcl",
+        "s3:GetBucketCORS",
+        "s3:GetBucketLogging",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketTagging",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketWebsite",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration",
+        "s3:ListBucket",
+        "s3:PutBucketTagging"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_s3_bucket",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "inconclusive",
+      "attempts": 17,
+      "actions": [
+        "s3:DeleteBucket",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketAcl",
+        "s3:GetBucketCORS",
+        "s3:GetBucketLogging",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketTagging",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketWebsite",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration",
+        "s3:ListBucket"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_s3_bucket__prefix",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 17,
+      "actions": [
+        "s3:DeleteBucket",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketAcl",
+        "s3:GetBucketCORS",
+        "s3:GetBucketLogging",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketTagging",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketWebsite",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration"
+      ]
     }
   ]
 }
