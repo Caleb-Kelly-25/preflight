@@ -116,6 +116,12 @@ resources:
   - type: aws_ecs_task_definition
     service: ecs
     status: draft
+    # Create and delete derived 2026-09-28 with
+    # SUPPORT=./derivefixtures/support/service_role, which supplies the role that
+    # both execution_role_arn and task_role_arn hand to ECS. Update is not: a task
+    # definition is immutable, so an 'update' registers a NEW revision and
+    # deregisters the old one, which no fixture has exercised.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html
     # The revision is assigned by AWS. That makes this template resolve on
     # delete (from the before state, where the revision is known) and degrade to
@@ -136,6 +142,8 @@ resources:
     operations:
       create:
         - ecs:RegisterTaskDefinition
+        # GATE MEASURED both directions 2026-09-28: the tagged fixture derives it and
+        # derivefixtures/aws_ecs_task_definition__minimal reports it surplus.
         - action: ecs:TagResource
           when: { attribute_set: [tags, tags_all] }
       update:

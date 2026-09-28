@@ -34,6 +34,11 @@ resources:
   - type: aws_lambda_function
     service: lambda
     status: draft
+    # Create derived 2026-09-28 from three fixture variants (two gates), delete the
+    # same day, both with SUPPORT=./derivefixtures/support/service_role. Update is
+    # NOT claimed: only its tags branch was measured, and the entry maps a dozen
+    # other update actions gated on attributes no fixture exercised.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
     # function_name is a bare name here (it is the resource's own name), so it
     # templates cleanly AND — unlike `arn` — it is known at plan time, so a
@@ -52,12 +57,23 @@ resources:
     # REASONED, NOT MEASURED. GetFunction is certain. The other three are the
     # provider's per-read side calls as best as can be established without an
     # apply; see notes for what was deliberately left out and why.
+    # lambda:ListTags AND lambda:GetRuntimeManagementConfig WERE HERE and were removed
+    # 2026-09-28, after being measured surplus in ALL THREE operations — create
+    # (three fixture variants), update and delete. That is the bar for narrowing a
+    # read set, set by the ECS case where an action surplus on create and delete
+    # turned out to be REQUIRED on update.
+    #
+    # Lambda returns tags inline from GetFunction, so ListTags is never called. That
+    # is the FOURTH distinct answer on tag read-backs: ECS inline (surplus), RDS a
+    # separate call (required), ELB a separate call (required), Lambda inline
+    # (surplus). Four services, and it has not been inferable once.
+    #
+    # Removing them takes two actions off every Lambda plan, on one of the most
+    # widely used resource types in the database.
     read_actions:
       - lambda:GetFunction
       - lambda:GetFunctionCodeSigningConfig
-      - lambda:GetRuntimeManagementConfig
       - lambda:ListVersionsByFunction
-      - lambda:ListTags
 
     operations:
       create:
@@ -67,8 +83,16 @@ resources:
         # CreateVpc, where no separate API call is made but the action is still
         # required. REASONED from AWS's tag-on-create documentation, not
         # measured.
+        # GATE MEASURED both directions 2026-09-28: the tagged fixtures derive it and
+        # derivefixtures/aws_lambda_function__minimal reports it surplus.
         - action: lambda:TagResource
           when: { attribute_set: [tags, tags_all] }
+        # GATE MEASURED both directions 2026-09-28. derivefixtures/aws_lambda_function
+        # sets reserved_concurrent_executions and needs this;
+        # …__tagsonly leaves it unset and reports it surplus. Note the fixture uses
+        # ZERO, which is a meaningful value — reserving capacity is what needs the
+        # permission, not the amount — so this gate does not depend on the
+        # false-boolean trap.
         - action: lambda:PutFunctionConcurrency
           when: { attribute_set: reserved_concurrent_executions }
         - action: lambda:PutRuntimeManagementConfig

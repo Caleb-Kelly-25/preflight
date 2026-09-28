@@ -1,0 +1,87 @@
+{
+  "resource_type": "aws_lambda_function",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_lambda_function",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 14,
+      "actions": [
+        "iam:PassRole",
+        "lambda:CreateFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:ListVersionsByFunction",
+        "lambda:PutFunctionConcurrency",
+        "lambda:TagResource"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_lambda_function__tagsonly",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 15,
+      "actions": [
+        "iam:PassRole",
+        "lambda:CreateFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:ListVersionsByFunction",
+        "lambda:TagResource"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_lambda_function__minimal",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 16,
+      "actions": [
+        "iam:PassRole",
+        "lambda:CreateFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:ListVersionsByFunction"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_lambda_function",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 9,
+      "actions": [
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:ListVersionsByFunction"
+      ]
+    },
+    {
+      "operation": "update",
+      "fixture": "derivefixtures/aws_lambda_function__update_tags",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 28,
+      "actions": [
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:ListVersionsByFunction",
+        "lambda:TagResource",
+        "lambda:UntagResource"
+      ]
+    }
+  ]
+}

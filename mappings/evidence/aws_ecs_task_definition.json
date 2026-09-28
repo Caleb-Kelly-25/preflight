@@ -1,0 +1,46 @@
+{
+  "resource_type": "aws_ecs_task_definition",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_ecs_task_definition",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "partial",
+      "attempts": 7,
+      "actions": [
+        "ecs:DescribeTaskDefinition",
+        "ecs:RegisterTaskDefinition",
+        "ecs:TagResource",
+        "iam:PassRole"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_ecs_task_definition",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 6,
+      "actions": [
+        "ecs:DeregisterTaskDefinition"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_ecs_task_definition__minimal",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "partial",
+      "attempts": 8,
+      "actions": [
+        "ecs:DescribeTaskDefinition",
+        "ecs:RegisterTaskDefinition",
+        "iam:PassRole"
+      ]
+    }
+  ]
+}
