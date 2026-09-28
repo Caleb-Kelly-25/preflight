@@ -8,13 +8,18 @@ apply it — before merge, without touching a single real resource.
 > GitHub Action are published.
 >
 > **The honest limitation is coverage, not machinery.** The mapping database
-> holds 25 resource types across seven services, and most operations are
-> `draft` — meaning the action list was written from working knowledge rather
-> than proven against a real apply. A `draft` operation caps its findings at
-> `Likely` and says so. Point this at a large plan today and a good deal of it
-> will come back `Unchecked`, which is the correct answer to a question we
-> cannot yet answer, and is reported rather than hidden. See
-> [Coverage](#coverage).
+> holds 38 resource types across 13 services. **Create and delete paths are
+> measured against real AWS for 86% of them; update paths for 8%.** An
+> unmeasured operation caps its findings at `Likely` and says which reason
+> applies — it is never silently treated as safe.
+>
+> That asymmetry is deliberate. An update path costs three to six times what a
+> create costs to measure, because the required actions depend on *which*
+> attribute changed and each branch needs its own experiment, while `Likely` is
+> already a correct and useful verdict. Point this at a large plan today and the
+> creates and deletes are largely `Verified`; updates and unmapped types come
+> back `Likely` or `Unchecked`, which is the right answer to a question nobody
+> has yet paid to answer. See [Coverage](#coverage).
 
 ## The problem
 
@@ -344,10 +349,33 @@ being inspected.
 
 ## Coverage
 
-`preflight mappings list` prints what is currently mapped, and marks each
-operation that has been proven. Most are still `draft` — written from working
-knowledge and not proven complete. **A `draft` operation caps every finding it
-produces at `Likely`.** Do not rely on those action lists.
+`preflight mappings list` prints what is currently mapped and marks each
+operation that has been proven, with a per-operation summary at the end:
+
+```
+38 resource types mapped, 4 fully verified, 23 partially verified
+
+by operation, which is how findings are actually capped:
+  create  33 of 38 entries measured (86%)
+  update   3 of 36 entries measured (8%)
+  delete  33 of 38 entries measured (86%)
+```
+
+**Read the per-operation rows, not the entry counts.** Findings are capped per
+operation, not per entry, so a plan that only creates resources draws on the
+create row. The "fully verified" count is low because it requires every
+operation including update, which is the most expensive to measure and the least
+often needed.
+
+**An unmeasured operation caps every finding it produces at `Likely`**, with the
+reason stated. Do not rely on those action lists.
+
+Measurement finds real defects, which is the argument for doing it rather than
+reasoning: **every one of the first ten entries measured was wrong, always by
+omission** — the direction that produces a false "allowed". Sixteen such gaps
+have been found and closed so far, including actions no amount of reading the
+documentation would suggest, such as `ec2:DescribeNetworkInterfaces` to delete a
+security group or `route53:GetDNSSEC` to delete a hosted zone.
 
 Verification takes two things, because a correct-looking list can still be
 incomplete, and it is incompleteness that produces a false "allowed":
@@ -388,11 +416,15 @@ sourcing and the silent-allow mitigation; contract tests against real AWS.
 
 Near-term, in order:
 
-1. **Verify the mapping entries.** Nine of ten are `draft`, which caps their
-   findings at `Likely`. This is the highest-value work available and needs no Go.
-2. Measure ARN derivability across real plans — what fraction of creates yield an
-   exact ARN decides how often `Verified` is reachable at all.
-3. Broaden the mapping database: EC2, RDS, Lambda, VPC, ECS.
+1. **Measure ARN derivability across real plans** — what fraction of creates yield
+   an exact ARN decides how often `Verified` is reachable at all. This needs real
+   plan files rather than AWS access, and is the one open question no amount of
+   engineering here can answer.
+2. **Measure the remaining entries.** Five are unmeasured, and each needs real
+   infrastructure to derive: load balancers and RDS instances bill by the hour,
+   and a KMS key cannot be deleted for seven days.
+3. **Update paths**, deliberately last. `Likely` is a correct verdict, and each
+   update costs several times what a create does.
 4. Conditional actions and cross-resource requirements (`iam:PassRole`) in the
    mapping schema.
 5. Tag `v0.1.0`. The [GitHub Action](#github-action) and the GoReleaser pipeline
