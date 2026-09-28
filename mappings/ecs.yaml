@@ -211,6 +211,19 @@ resources:
   - type: aws_ecs_service
     service: ecs
     status: draft
+    # Create and delete derived 2026-09-28 with
+    # SUPPORT=./derivefixtures/support/ecs_service, at desired_count = 0 so no task
+    # ever ran and nothing was billed. Update is not derived.
+    #
+    # ecs:ListTagsForResource is SURPLUS on create and REQUIRED on delete, so it
+    # stays in read_actions and over-reports by one action on a create. Narrowing it
+    # to delete-only needs the update path measured first.
+    #
+    # iam:PassRole came back surplus, which is expected rather than a finding: the
+    # reference is gated on `iam_role`, the legacy ELB-integration service role, and
+    # the fixture sets no load balancer. The harness seeds every reference
+    # unconditionally because it has no plan to evaluate a `when` gate against.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html
     # The long ARN format, which has been mandatory since 2021: the service ARN
     # embeds the CLUSTER NAME as well as the service name.
@@ -236,6 +249,8 @@ resources:
     operations:
       create:
         - ecs:CreateService
+        # GATE MEASURED both directions 2026-09-28: the tagged fixture derives it and
+        # derivefixtures/aws_ecs_service__minimal reports it surplus.
         - action: ecs:TagResource
           when: { attribute_set: [tags, tags_all] }
       update:

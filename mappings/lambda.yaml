@@ -187,6 +187,10 @@ resources:
   - type: aws_lambda_permission
     service: lambda
     status: draft
+    # Create and delete derived 2026-09-28 with
+    # SUPPORT=./derivefixtures/support/lambda_function, and both already correct.
+    # The resource_policy_capable caveat still caps findings here regardless.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
     # `function_name` accepts a bare name OR a full function ARN, and both
     # spellings are common. arn_or_name is what makes templating it safe: a
@@ -252,6 +256,10 @@ resources:
   - type: aws_lambda_event_source_mapping
     service: lambda
     status: draft
+    # Create and delete derived 2026-09-28 with
+    # SUPPORT=./derivefixtures/support/lambda_function. lambda:ListTags was missing
+    # from both; see the read_actions comment, it is the most interesting result here.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
     # The UUID is assigned by AWS, so this resolves on update and delete (from
     # the before state) and degrades to "*" on create. That degradation is
@@ -269,11 +277,29 @@ resources:
     context_keys:
       "aws:RequestTag/*":
         from: tags
+    # lambda:ListTags MISSING UNTIL MEASURED 2026-09-28, and required on create AND
+    # delete.
+    #
+    # THE SAME ACTION WAS REMOVED FROM aws_lambda_function ON THE SAME DAY as measured
+    # surplus, which is the sharpest result this database has produced. A Lambda
+    # FUNCTION returns its tags inline from GetFunction, so ListTags is never called;
+    # GetEventSourceMapping does NOT, so it is required. Same service, same action,
+    # opposite answers, two resource types apart.
+    #
+    # That refines a rule rather than adding a case. Tag read-backs were already known
+    # to be per-SERVICE and not inferable — ECS inline, RDS separate, ELB separate.
+    # They are per-RESOURCE-TYPE. Knowing how one resource in a service behaves tells
+    # you nothing about the next one, and the two mistakes point opposite ways: a
+    # wrong "surplus" is a FALSE PASS, a wrong "required" is only a false positive.
     read_actions:
       - lambda:GetEventSourceMapping
+      - lambda:ListTags
     operations:
       create:
         - lambda:CreateEventSourceMapping
+        # GATE MEASURED both directions 2026-09-28: the tagged fixture derives it
+        # and derivefixtures/aws_lambda_event_source_mapping__minimal reports it
+        # surplus.
         - action: lambda:TagResource
           when: { attribute_set: [tags, tags_all] }
       update:
@@ -304,6 +330,12 @@ resources:
   - type: aws_lambda_layer_version
     service: lambda
     status: draft
+    # Create and delete derived 2026-09-28 and both already correct. Self-contained:
+    # a layer version needs only a zip, built in-process from inline content.
+    #
+    # This says nothing about the ARN defect described in the notes — measuring an
+    # action list cannot tell you the ARN it is scoped to is wrong.
+    verified_operations: [create, delete]
     source: https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html
     # CORRECTED 2026-09-25, after the arn_format check measured it against AWS's
     # machine-readable service reference.

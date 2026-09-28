@@ -200,6 +200,17 @@ permission is required every time for a different reason: S3 needs a separate
 `PutBucketTagging` call, while IAM and EC2 authorise tagging as part of the
 create with no separate call at all. None of it is inferable from the API shape.
 
+**Tag READ-BACKS are per RESOURCE TYPE, not per service, and that was measured the
+hard way.** `lambda:ListTags` was REMOVED from `aws_lambda_function` as surplus and
+ADDED to `aws_lambda_event_source_mapping` as missing, on the same day: a function
+returns its tags inline from `GetFunction`, an event source mapping does not.
+Likewise `ecs:ListTagsForResource` is surplus on `aws_ecs_service`'s create and
+required on its delete.
+
+So knowing how one resource in a service behaves tells you nothing about the next,
+and the two mistakes are not symmetric: **a wrong "surplus" is a FALSE PASS, a wrong
+"required" is only a false positive.** When in doubt, leave it in.
+
 ## Current state
 
 Run `go run ./cmd/preflight mappings list` for the live coverage numbers rather

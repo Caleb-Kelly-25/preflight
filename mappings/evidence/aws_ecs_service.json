@@ -1,0 +1,47 @@
+{
+  "resource_type": "aws_ecs_service",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_ecs_service",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 8,
+      "actions": [
+        "ecs:CreateService",
+        "ecs:DescribeServices",
+        "ecs:TagResource"
+      ]
+    },
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_ecs_service__minimal",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 9,
+      "actions": [
+        "ecs:CreateService",
+        "ecs:DescribeServices"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_ecs_service",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "inconclusive",
+      "attempts": 6,
+      "actions": [
+        "ecs:DeleteService",
+        "ecs:DescribeServices",
+        "ecs:ListTagsForResource",
+        "ecs:UpdateService"
+      ]
+    }
+  ]
+}

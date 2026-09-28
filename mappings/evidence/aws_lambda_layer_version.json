@@ -1,0 +1,31 @@
+{
+  "resource_type": "aws_lambda_layer_version",
+  "runs": [
+    {
+      "operation": "create",
+      "fixture": "derivefixtures/aws_lambda_layer_version",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 3,
+      "actions": [
+        "lambda:GetLayerVersion",
+        "lambda:PublishLayerVersion"
+      ]
+    },
+    {
+      "operation": "delete",
+      "fixture": "derivefixtures/aws_lambda_layer_version",
+      "derived_at": "2026-09-28",
+      "provider_version": "6.66.0",
+      "sufficiency": "proven",
+      "minimality": "proven",
+      "attempts": 3,
+      "actions": [
+        "lambda:DeleteLayerVersion",
+        "lambda:GetLayerVersion"
+      ]
+    }
+  ]
+}
