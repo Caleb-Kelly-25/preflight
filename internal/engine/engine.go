@@ -136,6 +136,19 @@ func (opts Options) resolve(ctx context.Context, req Request, rep *finding.Repor
 	}
 
 	rep.Warnings = append(rep.Warnings, resp.Warnings...)
+
+	// Carry the simulator's own accounting up to the report. Converted rather
+	// than assigned because finding.SimulationStats is a separate type: `finding`
+	// must not import `engine`.
+	rep.Stats = &finding.SimulationStats{
+		Calls:       resp.Stats.Calls,
+		Evaluations: resp.Stats.Evaluations,
+		Pages:       resp.Stats.Pages,
+		Retries:     resp.Stats.Retries,
+		Throttles:   resp.Stats.Throttles,
+		CacheHits:   resp.Stats.CacheHits,
+		ElapsedMS:   resp.Stats.Elapsed.Milliseconds(),
+	}
 	return resp.Outcomes, true
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/Caleb-Kelly-25/preflight/internal/engine"
 	"github.com/Caleb-Kelly-25/preflight/internal/finding"
@@ -24,6 +25,9 @@ type fakeSimulator struct {
 	err        error               // whole-call failure
 	failItems  map[int]bool        // per-item batch failure
 	dropLast   bool                // return a short Outcomes slice
+	// stats is returned verbatim, so a test can assert the engine carries it up
+	// to the report rather than dropping it.
+	stats engine.Stats
 
 	requests []engine.Request // recorded for assertions
 }
@@ -60,6 +64,7 @@ func (f *fakeSimulator) Resolve(_ context.Context, req engine.Request) (engine.R
 	if f.dropLast && len(resp.Outcomes) > 0 {
 		resp.Outcomes = resp.Outcomes[:len(resp.Outcomes)-1]
 	}
+	resp.Stats = f.stats
 	return resp, nil
 }
 
@@ -1162,5 +1167,48 @@ func TestNoSCPDowngrade(t *testing.T) {
 				t.Errorf("%s: SCP-based reason %q reappeared", f.ResourceAddress, r)
 			}
 		}
+	}
+}
+
+// TestSimulationStatsReachTheReport covers the half of plan item 0.4 that was
+// actually broken. internal/engine/simulator.go had documented Stats as "surfaced
+// under --explain" since M2, and Options.resolve copied Warnings and Outcomes and
+// dropped them — so the simulator computed these numbers on every run and nothing
+// ever read them.
+//
+// IAM's simulate throttling limits are unpublished, and the only way to learn them
+// is from real runs in the field. That requires the numbers to survive the trip from
+// the simulator to a report someone looks at.
+func TestSimulationStatsReachTheReport(t *testing.T) {
+	sim := &fakeSimulator{stats: engine.Stats{
+		Calls: 2, Evaluations: 30, Pages: 3, Retries: 1, Throttles: 1,
+		CacheHits: 5, Elapsed: 1500 * time.Millisecond,
+	}}
+	rep := analyze(t, engine.Options{Database: testDB(t, "verified"), Simulator: sim})
+
+	if rep.Stats == nil {
+		t.Fatal("report carries no Stats; the engine dropped what the simulator returned")
+	}
+	if rep.Stats.Calls != 2 || rep.Stats.Evaluations != 30 {
+		t.Errorf("Calls=%d Evaluations=%d, want 2 and 30", rep.Stats.Calls, rep.Stats.Evaluations)
+	}
+	if rep.Stats.Pages != 3 || rep.Stats.Retries != 1 || rep.Stats.Throttles != 1 || rep.Stats.CacheHits != 5 {
+		t.Errorf("stats lost a field: %+v", rep.Stats)
+	}
+	// Milliseconds rather than a Duration: a Duration serialises to JSON as an
+	// unlabelled nanosecond count, which invites being read as seconds.
+	if rep.Stats.ElapsedMS != 1500 {
+		t.Errorf("ElapsedMS=%d, want 1500", rep.Stats.ElapsedMS)
+	}
+}
+
+// TestNoStatsWhenTheSimulatorFails pins the nil case at the engine level. A failed
+// call means nothing was evaluated, and reporting zeros would claim AWS answered
+// with nothing rather than that it was never asked.
+func TestNoStatsWhenTheSimulatorFails(t *testing.T) {
+	sim := &fakeSimulator{err: fmt.Errorf("network is unreachable")}
+	rep := analyze(t, engine.Options{Database: testDB(t, "verified"), Simulator: sim})
+	if rep.Stats != nil {
+		t.Errorf("report carries Stats after a failed simulation: %+v", rep.Stats)
 	}
 }

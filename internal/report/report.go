@@ -142,6 +142,7 @@ func WriteText(w io.Writer, r *finding.Report, opts WriteOptions) error {
 	}
 
 	writeSuppressedNote(&b, r)
+	writeStats(&b, r, opts)
 
 	c := r.Counts()
 	fmt.Fprintf(&b, "summary: %d verified, %d likely, %d unchecked, %d with missing permissions\n",
@@ -277,4 +278,45 @@ func levelBlurb(l finding.Level) string {
 	default:
 		return "  Not checked. Do not read these as safe."
 	}
+}
+
+// writeStats prints what the simulator actually did, under --explain only.
+//
+// Behind --explain because it answers a maintainer's question, not a user's: a
+// team wants to know whether their plan can apply, and a line about cache hits
+// competes with that for attention. But the numbers have to be REACHABLE, because
+// IAM's simulate throttling limits are unpublished and the only way to learn them
+// is from real runs. They were computed and discarded until 2026-09-28.
+//
+// Nothing is printed when no simulation ran — every finding decided without asking
+// AWS, or the call failed. Printing zeros there would read as "we asked and got
+// nothing", which is a different and more alarming claim.
+func writeStats(b *strings.Builder, r *finding.Report, opts WriteOptions) {
+	if !opts.Explain || r.Stats == nil {
+		return
+	}
+	st := r.Stats
+
+	b.WriteString("simulation\n")
+	fmt.Fprintf(b, "  %d API call(s), %d evaluation(s) returned", st.Calls, st.Evaluations)
+	// The ratio is why both are reported: it measures batching. Per-resource
+	// condition-key values fragment batches, and when they do, calls climb toward
+	// evaluations.
+	if st.Calls > 0 && st.Evaluations > 0 {
+		fmt.Fprintf(b, " (%.1f per call)", float64(st.Evaluations)/float64(st.Calls))
+	}
+	b.WriteString("\n")
+
+	if st.Pages > 1 {
+		fmt.Fprintf(b, "  %d pages\n", st.Pages)
+	}
+	if st.CacheHits > 0 {
+		fmt.Fprintf(b, "  %d cache hit(s)\n", st.CacheHits)
+	}
+	// Throttling is the datum the unpublished-limits question needs, and the
+	// signal that a larger plan will start failing.
+	if st.Throttles > 0 || st.Retries > 0 {
+		fmt.Fprintf(b, "  %d throttle(s), %d retry(ies)\n", st.Throttles, st.Retries)
+	}
+	fmt.Fprintf(b, "  %dms elapsed\n\n", st.ElapsedMS)
 }

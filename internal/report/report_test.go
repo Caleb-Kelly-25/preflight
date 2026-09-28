@@ -245,3 +245,81 @@ func TestParseFormat(t *testing.T) {
 		t.Error("ParseFormat accepted an unknown format")
 	}
 }
+
+// TestStatsReachTheUser guards plan item 0.4, which was an unfulfilled promise for
+// the whole of M2: internal/engine/simulator.go documented Stats as "surfaced under
+// --explain", and engine.Options.resolve copied Warnings and Outcomes and dropped
+// them. The numbers were computed on every run and discarded.
+//
+// That mattered beyond tidiness. IAM's simulate throttling limits are unpublished,
+// and the only way to learn them is from real runs in the field — which requires the
+// numbers to reach somebody.
+func TestStatsReachTheUser(t *testing.T) {
+	rep := &finding.Report{
+		PrincipalARN: "arn:aws:iam::123456789012:user/deployer",
+		Findings: []finding.Finding{{
+			ResourceAddress: "aws_s3_bucket.b",
+			Operation:       "create",
+			Level:           finding.LevelVerified,
+		}},
+		Stats: &finding.SimulationStats{
+			Calls: 3, Evaluations: 42, Pages: 2, Retries: 1, Throttles: 1,
+			CacheHits: 7, ElapsedMS: 1234,
+		},
+	}
+
+	var withExplain strings.Builder
+	if err := report.WriteText(&withExplain, rep, report.WriteOptions{Explain: true}); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	got := withExplain.String()
+
+	for _, want := range []string{
+		"simulation",
+		"3 API call(s)",
+		"42 evaluation(s)",
+		"14.0 per call", // the ratio: 42/3, which is how batching is measured
+		"2 pages",
+		"7 cache hit(s)",
+		"1 throttle(s), 1 retry(ies)",
+		"1234ms",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("--explain output is missing %q:\n%s", want, got)
+		}
+	}
+
+	// Without --explain it must stay out of the way. This block answers a
+	// maintainer's question, and a team reading a failing check does not need to
+	// scroll past cache-hit counts to find out whether their deploy will work.
+	var plain strings.Builder
+	if err := report.WriteText(&plain, rep, report.WriteOptions{}); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	if strings.Contains(plain.String(), "API call(s)") {
+		t.Errorf("stats leaked into the default output:\n%s", plain.String())
+	}
+}
+
+// TestNoStatsWhenNothingWasSimulated pins the nil case. A report with no simulation
+// — every finding decided without asking AWS, or the call failed outright — must
+// print nothing rather than a row of zeros, which would read as "we asked AWS and it
+// returned nothing". That is a different and more alarming claim than "we never
+// asked".
+func TestNoStatsWhenNothingWasSimulated(t *testing.T) {
+	rep := &finding.Report{
+		PrincipalARN: "arn:aws:iam::123456789012:user/deployer",
+		Findings: []finding.Finding{{
+			ResourceAddress: "aws_thing.x",
+			Operation:       "create",
+			Level:           finding.LevelUnchecked,
+		}},
+	}
+	var b strings.Builder
+	if err := report.WriteText(&b, rep, report.WriteOptions{Explain: true}); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	if strings.Contains(b.String(), "simulation\n") || strings.Contains(b.String(), "API call(s)") {
+		t.Errorf("printed simulation stats when none were recorded:\n%s", b.String())
+	}
+}

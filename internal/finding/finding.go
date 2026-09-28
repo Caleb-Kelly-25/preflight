@@ -262,6 +262,40 @@ type Report struct {
 	Findings     []Finding `json:"findings"`
 	// Warnings are run-level caveats that are not tied to one resource.
 	Warnings []string `json:"warnings,omitempty"`
+	// Stats is what the simulator actually did, shown under --explain. Nil when
+	// no simulation ran — every finding decided without asking AWS, or the call
+	// failed — which is why it is a pointer rather than a zero value that would
+	// read as "one call, nothing returned".
+	Stats *SimulationStats `json:"stats,omitempty"`
+}
+
+// SimulationStats records what the simulator did, for --explain and for JSON
+// consumers.
+//
+// IT EXISTS TO ANSWER A QUESTION NOBODY ELSE CAN. IAM's simulate throttling
+// limits are not published, so the only way to learn them is from real runs in
+// the field — which requires the numbers to reach a user in the first place.
+// They were computed and dropped on the floor until 2026-09-28; the comment in
+// internal/engine/simulator.go had promised they were "surfaced under --explain"
+// since M2.
+//
+// Duplicated from engine.Stats rather than shared, because `finding` must not
+// import `engine` — the dependency runs the other way, and inverting it to save
+// seven fields would put the classifier's types downstream of the simulator's.
+type SimulationStats struct {
+	// Calls is API calls issued; Evaluations is action×resource pairs returned.
+	// The ratio measures batching: if per-resource condition-key values fragment
+	// the batches, Calls climbs toward Evaluations.
+	Calls       int `json:"calls"`
+	Evaluations int `json:"evaluations"`
+	Pages       int `json:"pages"`
+	Retries     int `json:"retries"`
+	Throttles   int `json:"throttles"`
+	CacheHits   int `json:"cache_hits"`
+	// ElapsedMS is milliseconds, not a time.Duration, because a Duration
+	// serialises to JSON as an unlabelled integer count of nanoseconds and
+	// silently invites a reader to interpret it as seconds.
+	ElapsedMS int64 `json:"elapsed_ms"`
 }
 
 // Counts summarises a report by confidence level.

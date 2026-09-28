@@ -129,7 +129,7 @@ preflight version
 | `--fail-on` | `denied` | `denied`, `likely`, or `unchecked` |
 | `--region` | *(plan, then environment)* | used to build resource ARNs |
 | `--context` | | supply a condition key, repeatable: `--context aws:SourceIp@ip=10.0.0.1` |
-| `--explain` | `false` | show the context supplied and the raw decision per action |
+| `--explain` | `false` | show the context supplied, the raw decision per action, and what the simulator did (calls, evaluations, throttles, elapsed) |
 | `--timeout` | `5m` | overall budget for AWS calls |
 
 `--context` takes an optional type after `@`: `string` (the default),

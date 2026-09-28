@@ -65,8 +65,11 @@ type Response struct {
 	// were throttled past their retries, pages that were lost.
 	Warnings []string
 
-	// Stats is diagnostic only, surfaced under --explain. IAM's rate limits are
-	// not published, so this is how we learn the real ones from the field.
+	// Stats is diagnostic only, surfaced under --explain and in JSON output.
+	// IAM's rate limits are not published, so this is how we learn the real ones
+	// from the field — which only works if the numbers reach a user. They did not
+	// until 2026-09-28: Options.resolve copied Warnings and Outcomes and dropped
+	// these, so the promise in this comment was false for the whole of M2.
 	Stats Stats
 }
 
