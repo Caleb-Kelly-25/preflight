@@ -233,14 +233,22 @@ runs:
         # credentials the job already has; an action that quietly supplied its
         # own would be checking a different identity than the one that runs
         # apply, which is exactly the failure this tool exists to catch.
+        # `code=0; cmd || code=$?` rather than `cmd; code=$?`, and the difference
+        # is not style. The runner invokes this script as
+        # `bash --noprofile --norc -e -o pipefail {0}`: errexit arrives on the
+        # COMMAND LINE, where no `set -uo pipefail` in the body can clear it, and
+        # a non-zero preflight killed the script before `code=$?` ever ran. The
+        # outputs below were then never written, so the documented `exit-code`
+        # escape hatch reported nothing on exactly the runs it exists for — the
+        # ones with findings. A command on the left of `||` is exempt from
+        # errexit, so this form is correct whether or not `-e` is in effect.
         sarif=""
+        code=0
         if [ "$FORMAT" = "sarif" ]; then
           sarif="${TMP}/preflight.sarif"
-          "$BIN" "${args[@]}" > "$sarif"
-          code=$?
+          "$BIN" "${args[@]}" > "$sarif" || code=$?
         else
-          "$BIN" "${args[@]}"
-          code=$?
+          "$BIN" "${args[@]}" || code=$?
         fi
 
         # This step deliberately succeeds whatever preflight returned, so that
