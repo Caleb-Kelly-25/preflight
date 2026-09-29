@@ -169,7 +169,7 @@ func TestMeasureOneBucketsEveryOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("measureOne: %v", err)
 	}
-	got, unmapped, inexact := &one.plan, one.unmapped, one.inexact
+	got, unmapped, wild, prefixed := &one.plan, one.unmapped, one.wildcard, one.prefixed
 
 	// Six actionable units: the non-AWS resource, the data source and the no-op
 	// must all be excluded, or the denominator of every percentage is wrong.
@@ -203,8 +203,14 @@ func TestMeasureOneBucketsEveryOutcome(t *testing.T) {
 	if len(unmapped) != 1 {
 		t.Errorf("only aws_notmapped is unmapped, got %v", unmapped)
 	}
-	if inexact["aws_prefixed"] != 1 || inexact["aws_wild"] != 1 {
-		t.Errorf("both inexact types should be recorded once each, got %v", inexact)
+	// The split that aws_iam_role exposed: a prefix-derived ARN is working as
+	// designed and must not appear beside a bare wildcard, which has no signal
+	// at all. Conflating them pointed improvement work at the wrong entries.
+	if wild["aws_wild"] != 1 || len(wild) != 1 {
+		t.Errorf("only aws_wild fell to a bare wildcard, got %v", wild)
+	}
+	if prefixed["aws_prefixed"] != 1 || len(prefixed) != 1 {
+		t.Errorf("only aws_prefixed resolved via name_prefix, got %v", prefixed)
 	}
 }
 

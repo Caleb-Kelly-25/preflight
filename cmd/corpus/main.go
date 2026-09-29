@@ -122,9 +122,20 @@ type report struct {
 	// count — a type in one plan 40 times is one team's habit, a type in six
 	// plans once each is a real gap.
 	UnmappedTypes []typeCount `json:"unmapped_types,omitempty"`
-	// InexactTypes are mapped types whose ARN could not be resolved. These are
-	// the candidates for an arn_prefix_attributes or arn_or_name declaration.
-	InexactTypes []typeCount `json:"inexact_arn_types,omitempty"`
+	// WildcardTypes are mapped types that fell all the way to a bare "*". These
+	// are the improvement targets: a wildcard denial proves nothing and is
+	// suppressed, so these units lose the red-finding signal entirely.
+	//
+	// Kept SEPARATE from prefix-derived, which was originally lumped in with it.
+	// That conflation was actively misleading: aws_iam_role looked like the
+	// worst offender in the corpus, and 19 of its 30 units were resolving
+	// through arn_prefix_attributes exactly as designed. A breakdown that mixes
+	// "as good as it can get" with "no signal at all" points work at the wrong
+	// entries.
+	WildcardTypes []typeCount `json:"wildcard_arn_types,omitempty"`
+	// PrefixTypes resolved through arn_prefix_attributes. Not exact, but a
+	// prefix-scoped policy matches them, so they are working as intended.
+	PrefixTypes []typeCount `json:"prefix_arn_types,omitempty"`
 }
 
 type typeCount struct {
@@ -225,8 +236,10 @@ func measure(db *mapping.Database, files []string) (*report, error) {
 
 	unmappedUnits := map[string]int{}
 	unmappedPlans := map[string]int{}
-	inexactUnits := map[string]int{}
-	inexactPlans := map[string]int{}
+	wildUnits := map[string]int{}
+	wildPlans := map[string]int{}
+	prefixUnits := map[string]int{}
+	prefixPlans := map[string]int{}
 
 	for _, path := range files {
 		one, err := measureOne(db, path)
@@ -252,14 +265,19 @@ func measure(db *mapping.Database, files []string) (*report, error) {
 			unmappedUnits[t] += n
 			unmappedPlans[t]++
 		}
-		for t, n := range one.inexact {
-			inexactUnits[t] += n
-			inexactPlans[t]++
+		for t, n := range one.wildcard {
+			wildUnits[t] += n
+			wildPlans[t]++
+		}
+		for t, n := range one.prefixed {
+			prefixUnits[t] += n
+			prefixPlans[t]++
 		}
 	}
 
 	rep.UnmappedTypes = rankTypes(unmappedUnits, unmappedPlans)
-	rep.InexactTypes = rankTypes(inexactUnits, inexactPlans)
+	rep.WildcardTypes = rankTypes(wildUnits, wildPlans)
+	rep.PrefixTypes = rankTypes(prefixUnits, prefixPlans)
 	return rep, nil
 }
 
@@ -270,7 +288,8 @@ type oneResult struct {
 	plan     planResult
 	byOp     map[string]*counts
 	unmapped map[string]int
-	inexact  map[string]int
+	wildcard map[string]int
+	prefixed map[string]int
 }
 
 func measureOne(db *mapping.Database, path string) (*oneResult, error) {
@@ -301,7 +320,8 @@ func measureOne(db *mapping.Database, path string) (*oneResult, error) {
 		plan:     planResult{Path: path, TerraformVersion: p.TerraformVersion},
 		byOp:     map[string]*counts{},
 		unmapped: map[string]int{},
-		inexact:  map[string]int{},
+		wildcard: map[string]int{},
+		prefixed: map[string]int{},
 	}
 	pr := &out.plan
 
@@ -348,17 +368,18 @@ func measureOne(db *mapping.Database, path string) (*oneResult, error) {
 				bump(func(c *counts) { c.ARNExact++ })
 			case arn == "*":
 				bump(func(c *counts) { c.ARNWildcard++ })
+				out.wildcard[rc.Type]++
 			default:
 				// A name_prefix-derived ARN. Not exact, so it caps at Likely,
 				// but it matches a policy scoped with a trailing wildcard where
 				// "*" matches nothing at all — worth counting separately.
 				bump(func(c *counts) { c.ARNPrefix++ })
+				out.prefixed[rc.Type]++
 			}
 
 			switch {
 			case !exact:
 				bump(func(c *counts) { c.Inexact++ })
-				out.inexact[rc.Type]++
 			case !res.VerifiedFor(mapping.Operation(op)):
 				bump(func(c *counts) { c.DraftOp++ })
 			default:
@@ -393,8 +414,11 @@ func (r *report) limitBreakdowns(n int) {
 	if len(r.UnmappedTypes) > n {
 		r.UnmappedTypes = r.UnmappedTypes[:n]
 	}
-	if len(r.InexactTypes) > n {
-		r.InexactTypes = r.InexactTypes[:n]
+	if len(r.WildcardTypes) > n {
+		r.WildcardTypes = r.WildcardTypes[:n]
+	}
+	if len(r.PrefixTypes) > n {
+		r.PrefixTypes = r.PrefixTypes[:n]
 	}
 }
 
@@ -453,7 +477,8 @@ func (r *report) writeText(w io.Writer, perPlan bool) {
 	}
 
 	writeTypeTable(w, "\nunmapped types (by how many plans contain them)", r.UnmappedTypes)
-	writeTypeTable(w, "\nmapped types whose ARN did not resolve", r.InexactTypes)
+	writeTypeTable(w, "\nmapped types that fell to a bare \"*\" (no denial signal at all)", r.WildcardTypes)
+	writeTypeTable(w, "\nmapped types resolved via name_prefix (working as designed)", r.PrefixTypes)
 }
 
 func writeTypeTable(w io.Writer, title string, rows []typeCount) {
