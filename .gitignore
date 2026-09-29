@@ -30,6 +30,13 @@ crash.*.log
 plan.json
 *.plan.json
 
+# examples/demo/plan.json is DELIBERATELY TRACKED and must survive the rule above.
+# It is a real `terraform plan` output, but of a throwaway two-resource config that
+# was never applied, and it is checked for the account id before every commit. The
+# CI demo workflow reads it, so the blanket rule silently breaking this file breaks
+# that workflow — which is exactly what happened the first time it was added.
+!examples/demo/plan.json
+
 # Contract-test fixture outputs — contain real account IDs and role ARNs
 testfixtures/aws/fixtures.json
 
