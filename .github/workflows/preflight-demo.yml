@@ -51,7 +51,13 @@ jobs:
     # The Action downloads its binary from this repository's releases, which is not
     # possible while the repository is private — the download 404s. Skipping rather
     # than failing keeps the signal honest: a red run should mean something is
-    # broken, not that a known precondition is unmet. Enables itself on going public.
+    # broken, not that a known precondition is unmet.
+    #
+    # The repository went public on 2026-09-29, so this now runs. The gate stays:
+    # it costs nothing, it documents the dependency, and if the repository is ever
+    # made private again this workflow should go quiet rather than red. Written to
+    # require an explicit `false` because `github.event.repository` is absent on
+    # some event types, and a missing value must not read as "public".
     if: ${{ github.event.repository.private == false }}
 
     steps:

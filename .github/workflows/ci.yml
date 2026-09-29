@@ -222,11 +222,19 @@ jobs:
   #   result   exit 2 classified as "could not run", not as a finding
   #
   # What it still does NOT cover: a run with real credentials, and therefore the
-  # SARIF round trip onto a pull request. Both need secrets and an owner
-  # decision.
-  # What the action-smoke job below cannot check while this repository is
-  # private: that every archive name the action is capable of asking for is
-  # actually published, and is covered by checksums.txt.
+  # SARIF round trip. That is the `preflight demo` workflow's job, which assumes
+  # a role via OIDC and runs only on pushes to main.
+  #
+  # This job is not redundant with that one. It runs on every push and on all
+  # three operating systems with no credentials at all, so it fails on a broken
+  # action.yml whoever pushed and whatever AWS is doing. It had never run at all
+  # before 2026-09-29, purely because the gate below held it shut, and the
+  # errexit bug it is written to detect shipped in v0.1.0 in the meantime.
+
+  # What the action-smoke job below cannot check: that every archive name the
+  # action is capable of asking for is actually published, and is covered by
+  # checksums.txt. action-smoke only ever exercises the runner it happens to be
+  # on.
   #
   # This is the failure mode worth guarding. The action reconstructs the archive
   # name from RUNNER_OS and RUNNER_ARCH; goreleaser decides what gets built. The

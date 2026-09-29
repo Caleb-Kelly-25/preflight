@@ -236,27 +236,45 @@ builds on tag. An earlier version of this section claimed both were "not yet
 implemented", which was wrong and is the kind of staleness to check rather than
 trust.
 
-**The caveat, and it is sharper than it looks: the Action cannot work at all
-while this repository is private.** Release assets of a private repository are
-not downloadable without credentials, so the action's `curl` gets a flat 404.
-Measured 2026-09-26 by actually running it on ubuntu, macOS and Windows runners —
-all three failed identically, before reaching the binary.
+**The repository went public on 2026-09-29, and everything that was blocked on
+it is now confirmed end to end.** Release assets download without credentials,
+`action-smoke` runs on ubuntu, macOS and Windows, and `preflight demo` assumes a
+real role via OIDC and checks a real plan. The SARIF round trip is proven: the
+demo's two findings landed as code-scanning alerts on `examples/demo/main.tf:30`
+and `:38`, which are exactly the two `resource` blocks they describe.
 
-That is **not** a bug in `action.yml`. The URL it builds is correct and the
-archive name it asks for is exactly the name published; the `release-assets` CI
-job proves the second half on every push. It is a fact about where the artifacts
-live, and it resolves itself when the repository goes public, with no code change.
+**Going public immediately found a real bug in `action.yml`, and the lesson
+generalises: a dormant guard is not a passed guard.** The earlier version of this
+section reasoned that the 404 was "not a bug in `action.yml`" — correct about the
+404, and it read as reassurance about the file as a whole. It was not. The `run`
+step captured preflight's exit code with
 
-Two consequences worth keeping straight:
+```bash
+"$BIN" "${args[@]}"
+code=$?
+```
 
-- The `action-smoke` CI job is **gated on `github.event.repository.private ==
-  false`** and enables itself when that changes. It is dormant, not broken — a
-  job that fails for a reason nobody intends to fix is worse than no job.
-- The SARIF round trip (annotations landing on the right line in a real pull
-  request) is still unconfirmed, and additionally needs AWS credentials in
-  repository secrets. That one is an owner decision, not something to automate.
+and the runner invokes a composite `shell: bash` step as `bash --noprofile --norc
+-e -o pipefail {0}`. **Errexit arrives on the command line, where the body's `set
+-uo pipefail` cannot clear it** — only `set +e` would, and it was never there. So
+a non-zero preflight killed the script *before* the assignment: `$GITHUB_OUTPUT`
+was never written, the `result` step was skipped, and `exit-code` and
+`sarif-file` came back empty on exactly the runs they exist for — the ones with
+findings. The documented way to tell a finding (1) from a failed check (2) did
+not work at all, and the SARIF upload, gated on `sarif-file`, silently never ran.
 
-`release-assets` carries the coverage in the meantime: it reconstructs every
+The fix is `code=0; cmd || code=$?`, which is correct whether or not `-e` is in
+effect, because a command on the left of `||` is exempt from errexit. Do not
+"simplify" it back.
+
+`action-smoke` asserts precisely this condition — an empty `exit-code` means the
+binary was never reached — on all three OSes with no AWS credentials. It was
+right, and it had never once run, because it was gated on
+`github.event.repository.private == false`. The gate was the correct call at the
+time; the cost of it is that the bug shipped in v0.1.0 and survived until the
+first real run.
+
+`release-assets` carried the coverage in the meantime: it reconstructs every
 archive name the action can ask for and asserts each is published AND listed in
 `checksums.txt`. The action builds that name from `RUNNER_OS`/`RUNNER_ARCH` while
 goreleaser decides what exists; nothing else connects the two, so dropping a
