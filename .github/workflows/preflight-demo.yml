@@ -1,0 +1,120 @@
+# Runs preflight against a real AWS identity, using OIDC.
+#
+# This is the only workflow here that touches AWS, and it exists to prove two
+# things nothing else can:
+#
+#   1. The published Action installs and runs on a real runner.
+#   2. The SARIF round trip works — annotations land on the right line.
+#
+# WHAT IT CHECKS. `examples/demo/plan.json` is a real `terraform plan` output (no
+# apply, nothing created) describing an S3 bucket and an IAM role. The identity it
+# is checked against, `preflight-demo-deploy`, holds `s3:CreateBucket` and nothing
+# else, so preflight reports the fourteen S3 read-backs and every IAM action as
+# missing. That is the demo: a plan that looks fine and cannot apply.
+#
+# IT DOES NOT GATE THIS REPOSITORY. preflight is *expected* to exit 1 here, so the
+# run asserts that it did rather than failing on it. A green run means "preflight
+# correctly found the missing permissions"; a red one means the tool, the Action or
+# the OIDC wiring is broken.
+#
+# WHY PUSH-TO-MAIN ONLY. The IAM role's trust policy names exactly one subject,
+# `...:ref:refs/heads/main`. Pull requests are deliberately NOT trusted: for a
+# public repository that would widen the set of people who can assume the role to
+# anyone with write access, and a same-repo PR runs the workflow file from the PR
+# branch — so a PR could rewrite this file and use the role. Fork PRs cannot get an
+# OIDC token at all (GitHub forces read-only permissions on them), so they were
+# never the risk; same-repo PRs are.
+#
+# NO SECRETS. OIDC means there is no long-lived credential to store. The two
+# repository *variables* hold role ARNs, which grant nothing without the trust
+# policy in AWS.
+
+name: preflight demo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege, and `id-token: write` is the one that is easy to omit — without
+# it no OIDC token is issued and the AWS step fails with a confusing error.
+permissions:
+  contents: read
+  id-token: write
+  security-events: write
+
+jobs:
+  demo:
+    name: check a plan against a real identity
+    runs-on: ubuntu-latest
+
+    # The Action downloads its binary from this repository's releases, which is not
+    # possible while the repository is private — the download 404s. Skipping rather
+    # than failing keeps the signal honest: a red run should mean something is
+    # broken, not that a known precondition is unmet. Enables itself on going public.
+    if: ${{ github.event.repository.private == false }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Third-party actions are pinned by commit SHA, not tag. A tag is mutable: the
+      # owner can repoint it at new code, which on a public repository with AWS
+      # credentials in scope is a supply-chain path straight to this job's token.
+      - name: Assume the read-only role via OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: preflight-demo
+
+      # Fails loudly and early if the role was assumed as something unexpected.
+      # Without this, a misconfigured trust policy shows up much later as puzzling
+      # permission errors.
+      - name: Confirm which identity we are
+        run: aws sts get-caller-identity
+
+      - id: preflight
+        uses: ./
+        # preflight exits 1 by design here — the demo identity is deliberately
+        # under-permissioned — so the step must not fail the job. The assertion
+        # below decides whether the run was a success.
+        continue-on-error: true
+        with:
+          plan: examples/demo/plan.json
+          config-dir: examples/demo
+          principal: ${{ vars.PREFLIGHT_TARGET_ROLE_ARN }}
+          region: us-east-1
+          format: sarif
+          fail-on: denied
+
+      - name: preflight found the missing permissions it was supposed to
+        env:
+          CODE: ${{ steps.preflight.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+          echo "exit-code=${CODE:-<empty>}"
+
+          # Empty means the Action never reached the binary — a broken download,
+          # a checksum mismatch, an archive missing its executable.
+          if [ -z "${CODE:-}" ]; then
+            echo "::error title=preflight-demo::no exit code; the Action never ran the binary"
+            exit 1
+          fi
+          # 1 is the expected result: the demo identity cannot apply the plan.
+          # 0 would mean preflight found nothing, which given a role holding only
+          # s3:CreateBucket means the check silently did nothing — the exact
+          # false-pass this tool exists to prevent.
+          # 2 means it could not answer at all.
+          case "$CODE" in
+            1) echo "preflight correctly reported missing permissions" ;;
+            0) echo "::error title=preflight-demo::exit 0 — preflight found NOTHING against a role holding only s3:CreateBucket. That is a false pass."; exit 1 ;;
+            2) echo "::error title=preflight-demo::exit 2 — preflight could not complete the check (credentials, usage, or an AWS call)"; exit 1 ;;
+            *) echo "::error title=preflight-demo::unexpected exit code '$CODE'"; exit 1 ;;
+          esac
+
+      - name: Upload SARIF
+        if: ${{ steps.preflight.outputs.sarif-file != '' }}
+        uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3
+        with:
+          sarif_file: ${{ steps.preflight.outputs.sarif-file }}
+          category: preflight
