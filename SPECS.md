@@ -42,7 +42,7 @@ This is the single most important design principle in this spec: a false "safe" 
 Initial mapping database covers the highest-frequency AWS resource types only:
 S3, EC2, IAM, RDS, Lambda, VPC/networking, ECS.
 
-Explicitly out of scope for v1, revisit based on real usage data from step 1 of the go-to-market plan (talking to outside engineers).
+Explicitly out of scope for v1; revisit based on real usage data.
 
 ## 7. Output formats
 
@@ -54,24 +54,28 @@ Explicitly out of scope for v1, revisit based on real usage data from step 1 of 
 
 - **Core CLI/engine**: MIT or Apache 2.0. Fully permissive — this is the adoption wedge and needs zero legal-review friction.
 - **Mapping database (content)**: open, inspectable, community-contributable — necessary for keeping ~1,400+ potential resource types current over time, and builds trust that coverage claims are verifiable.
-- **Automated update pipeline** (the system that keeps the database current against new Terraform AWS provider releases and AWS IAM changes): kept proprietary. This is the harder-to-replicate asset.
-- **No BUSL/SSPL on the core CLI at MVP stage** — that friction is reserved for the future platform layer, if and when there's real revenue to protect. Revisit, don't pre-decide.
+- **Automated update pipeline** (the system that keeps the database current against
+  new Terraform AWS provider releases and AWS IAM changes): not part of this
+  repository.
+- The core CLI and the mapping content are Apache 2.0. Licensing beyond that is
+  recorded in GENERAL_DIRECTION.md (untracked).
 
 ## 9. Privacy / telemetry stance
 
 - **Fully offline by default in the free tier.** No data leaves the CI environment unless explicitly opted in.
-- Any future cloud sync (for the paid platform layer) is an explicit, visible opt-in — never a background default. This tool already requires read access to real AWS credentials; asking for additional implicit trust on top of that is a bigger ask than a typical static scanner makes, and should be treated accordingly.
+- Any future cloud sync is an explicit, visible opt-in — never a background default. This tool already requires read access to real AWS credentials; asking for additional implicit trust on top of that is a bigger ask than a typical static scanner makes, and should be treated accordingly.
 
 ## 10. Explicitly deferred to v1.x / v2 (not MVP)
 
-- Auto-posted inline PR comments with suggested minimal policy patches (pairs with Policy Sentry-style CRUD policy generation).
-- ~~SCP-aware simulation, if/when AWS's APIs make this reliably possible.~~ **No longer deferred — AWS does this for us, free.** See §5's note on SCPs.
+- Auto-posted inline PR comments with suggested minimal policy patches.
+- ~~SCP-aware simulation.~~ **No longer deferred — AWS does this for us, free.**
+  See §5's note on SCPs.
 - Resource-based policy analysis (S3 bucket policies, KMS key policies).
-- Multi-cloud (GCP most plausible next target — Azure already has a native equivalent).
-- Paid platform layer: cross-repo dashboards, historical trend data, SSO, audit logging, org-wide policy templates.
+- Multi-cloud (GCP most plausible next target — Azure already has a native
+  equivalent).
 
-## 11. Success metrics for the free tier (ties to GTM plan)
+<!-- Commercial scope, success metrics and go-to-market moved to
+     GENERAL_DIRECTION.md (untracked) on 2026-09-29. This file is the technical spec;
+     what is free versus paid, and why, is a business decision that does not
+     belong in a public engineering document. -->
 
-- Real adoption by teams outside the founding company — the direct test of whether this pain is broad, not team-specific.
-- Ratio of "Verified" vs "Unchecked" results across real-world plans — tells you which resource types to prioritize next for mapping coverage.
-- GitHub stars / Action marketplace installs as a leading indicator, not a vanity metric — mirrors how Checkov's adoption curve preceded Bridgecrew's platform revenue.

@@ -41,11 +41,12 @@ only `iam:SimulatePrincipalPolicy`.
    nearly every finding in an Organization down to `Likely`. It no longer does.
    `Verified` becomes commonly reachable, which is the difference between a tool
    that answers "yes" and one that answers "probably".
-2. **A stated justification for the paid tier partly evaporates.**
-   GENERAL_DIRECTION §3 names "resolving the Likely confidence state by checking
-   AWS Organizations SCPs and resource-based policies" as what legitimately
-   justifies payment. Half of that is now free, done by AWS, server-side. This
-   does not break the business model — see §0.3 — but it must not go unnoticed.
+2. **Half of what we expected to have to build, AWS already does.** Resolving the
+   `Likely` state was assumed to need our own evaluation of both Organizations SCPs
+   AND resource-based policies. SCPs turn out to be free, server-side, inside the
+   simulator; resource-based policies and RCPs are not, and still need an
+   evaluation engine of our own. The consequences beyond engineering are recorded
+   in GENERAL_DIRECTION.md (untracked).
 3. **ARCHITECTURE.md open question 6 is closed.** No `organizations:DescribeOrganization`
    probe, no `--no-organization` user assertion, no trust hole. Delete the idea.
 
@@ -88,22 +89,13 @@ design; it is the API's boundary.
 
 ### 0.3 What this means for the business model
 
-The paid-tier justification narrows but does not disappear — it relocates, and
-arguably to firmer ground:
+Moved to GENERAL_DIRECTION.md (untracked) on 2026-09-29.
 
-| Was going to justify payment | Status now |
-|---|---|
-| SCP evaluation | **Gone.** AWS does it free, server-side. |
-| Resource-based policy analysis | **Stronger.** Requires fetching bucket/key/queue policies across accounts — genuinely needs trust and access a CI role should not hold, and must be evaluated *outside* the simulator since the API refuses it for roles. |
-| RCP analysis | **New.** Same shape as the above: unsupported by the simulator, needs Organizations visibility. |
-| Cross-repo aggregation, trends, org policy templates | Unchanged, and untouched by any of this. |
-
-Note that resource-policy analysis now requires us to build an IAM evaluation
-engine rather than delegate to AWS's. That is more work — and a better moat.
-
-**This warrants an edit to GENERAL_DIRECTION §3.** Not a strategy change; a
-correction of a factual premise it rests on. Flagged, not made — that document
-is the founders' to change.
+The engineering fact that drove it stays here, because it is a fact about AWS and
+not about commercials: **SCPs are evaluated by the simulator for free, and
+resource-based policies and RCPs are not.** §0.1 and §0.2 have the measurements
+and the sources. What that implies for what is worth charging for is a business
+question, and a public engineering document is the wrong place to answer it.
 
 ### 0.4 One capability we did not know we had
 
@@ -861,7 +853,8 @@ Each milestone has an exit criterion that is a demonstration, not a checkbox.
 assumptions M2–M5 are built on. Do not start M2 first because it feels more like
 progress.
 
-**M1 doubles as the interview artifact.** GENERAL_DIRECTION §9 makes talking to
+**M1 doubles as the interview artifact.** (Interview planning lives in
+GENERAL_DIRECTION, untracked.) The point that matters here is technical: 
 5–10 outside engineers the top priority. A description-only conversation about a
 subtle failure mode gets polite agreement, not signal; running the tool against
 the interviewee's own plan file gets real reactions. Do M1, then interview with
