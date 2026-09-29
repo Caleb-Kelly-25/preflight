@@ -99,17 +99,39 @@ classification · `internal/simulate` the AWS client, batching and throttling ·
 `internal/derive` the derivation loop · `internal/finding` confidence types ·
 `internal/hclsrc` resource address → `.tf` file and line, for SARIF ·
 `internal/awsref` + `cmd/arncheck` verify every `arn_format` against AWS's
-machine-readable service reference · `internal/report` output · `mappings/` the
+machine-readable service reference · `cmd/corpus` measures coverage and ARN
+exactness across real plans, offline · `internal/report` output · `mappings/` the
 database itself · `derivefixtures/` Terraform fixtures the derivation runs
 against.
 
-Three commands, and only the first ships:
+Four commands, and only the first ships — `.goreleaser.yaml` builds `./cmd/preflight`
+and nothing else:
 
 | Command | Ships? | Needs AWS? | Notes |
 |---|---|---|---|
 | `cmd/preflight` | yes | credentials | the product |
 | `cmd/arncheck` | no | no credentials, but network | run by CI on every PR |
 | `cmd/derive` | no | credentials, CREATES resources | `awsderive` tag, three guards |
+| `cmd/corpus` | no | **nothing at all** | measures the ceiling on real plans |
+
+`cmd/corpus` reports, for a directory of plan files, how many change×operation
+units are mapped, how many reach an exact ARN, and what confidence each could at
+best reach. It reads plan JSON only — no AWS, no network, no Terraform — because
+`plan.Parse`, `Database.Lookup` and `Resource.BuildARN` are all pure. That is
+what makes it cheap enough to re-run whenever the database grows.
+
+Two things to keep straight about it:
+
+- **It reports a CEILING, not a result.** The engine says what it *can conclude*;
+  corpus says what the best possible conclusion *would be* if the simulator
+  answered perfectly. Folding it into `preflight check` would invite reading one
+  as the other.
+- **It duplicates exactly one rule from `engine.prepare`** — deletes read
+  `Change.Before`, creates and updates read `Change.After`. Change that in the
+  engine and it must change here, or the corpus measures a different population
+  than the product does. `TestDeleteIsMeasuredAgainstPriorState` exists because
+  getting it wrong is silent: every ARN degrades to `*` and the exactness number
+  drops with no error anywhere.
 
 `mappings/` is at the repo root, not under `internal/`, because the content is a
 community asset. Do not move it.
