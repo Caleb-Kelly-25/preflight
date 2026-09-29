@@ -164,3 +164,45 @@ func TestUnsupportedFormat(t *testing.T) {
 		}
 	}
 }
+
+// A repeated provider configuration block serialises as an ARRAY of expression
+// objects. Before this was tolerated, encoding/json failed the whole document,
+// so one repeated block in ANY provider — including providers preflight never
+// looks at — turned a valid plan into exit 2 with no findings. Found by
+// cmd/corpus on a real terraform-aws-lambda example, where the block was
+// `registry_auth` on the docker provider.
+func TestRepeatedProviderBlockDoesNotRejectThePlan(t *testing.T) {
+	const doc = `{
+  "format_version": "1.2",
+  "configuration": {
+    "provider_config": {
+      "docker": {
+        "name": "docker",
+        "expressions": {
+          "registry_auth": [
+            { "address": { "references": ["data.aws_caller_identity.this"] } },
+            { "password": { "references": ["data.aws_ecr_authorization_token.token"] } }
+          ]
+        }
+      },
+      "aws": {
+        "name": "aws",
+        "expressions": { "region": { "constant_value": "eu-west-1" } }
+      }
+    }
+  },
+  "resource_changes": []
+}`
+
+	p, err := Parse(strings.NewReader(doc))
+	if err != nil {
+		t.Fatalf("a repeated block in an unrelated provider must not fail the parse: %v", err)
+	}
+
+	// And the region must still be found, so tolerating the array does not cost
+	// the one thing provider_config is actually read for.
+	region, ok := p.ProviderRegion()
+	if !ok || region != "eu-west-1" {
+		t.Errorf("ProviderRegion() = %q, %v; want \"eu-west-1\", true", region, ok)
+	}
+}

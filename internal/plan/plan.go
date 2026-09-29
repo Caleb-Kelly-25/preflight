@@ -58,6 +58,35 @@ type ConfigExpr struct {
 	ConstantValue any `json:"constant_value"`
 }
 
+// UnmarshalJSON tolerates every shape Terraform emits for a configuration
+// expression, because getting this wrong rejects the whole plan.
+//
+// A REPEATED configuration block serialises as an ARRAY of expression objects
+// rather than as one object. Decoding straight into the struct made that a type
+// error, and encoding/json fails the entire document on one — so a single
+// repeated block anywhere in `provider_config` produced exit 2 and no findings
+// at all, on a plan that is perfectly valid.
+//
+// The block does not even have to belong to a provider preflight cares about.
+// cmd/corpus found this on a real terraform-aws-lambda example whose offending
+// block was `registry_auth` on the DOCKER provider, which this tool never looks
+// at; the only thing read out of `provider_config` is the AWS region.
+//
+// Only an object can carry a constant_value, so any other shape decodes to the
+// zero value and ProviderRegion simply finds no region there. The argument is
+// always a syntactically valid JSON value by the time it reaches here, so the
+// only error being swallowed is a type mismatch — exactly the case to tolerate.
+func (e *ConfigExpr) UnmarshalJSON(data []byte) error {
+	var obj struct {
+		ConstantValue any `json:"constant_value"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil
+	}
+	e.ConstantValue = obj.ConstantValue
+	return nil
+}
+
 // ProviderRegion returns the AWS provider's region when the configuration sets
 // it to a literal.
 //
